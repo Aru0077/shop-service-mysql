@@ -1,0 +1,274 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+  relationMode = "prisma"
+}
+
+model AdminUser {
+  id            Int    @id @default(autoincrement())
+  username      String    @unique(map: "idx_username") @db.VarChar(50)
+  password      String    @db.VarChar(255)
+  status        Int       @default(1) @db.TinyInt
+  isSuper       Boolean   @default(false) @map("is_super")
+  lastLoginTime DateTime?
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  @@map("admin_users")
+}
+
+model User {
+  id          String         @id @default(uuid()) @db.VarChar(36)
+  username    String         @unique(map: "idx_username") @db.VarChar(50)
+  password    String?        @db.VarChar(255)
+  facebookId  String?        @map("facebook_id") @db.VarChar(100)
+  isBlacklist Int            @default(0) @map("is_blacklist") @db.TinyInt
+  createdAt   DateTime       @default(now()) @map("created_at")
+  updatedAt   DateTime       @default(now()) @updatedAt @map("updated_at")
+  orders      Order[]
+  addresses   UserAddress[]
+  cartItems   UserCartItem[]
+  favorites   UserFavorite[]
+
+  @@map("users")
+}
+
+model Category {
+  id        Int       @id @default(autoincrement())
+  name      String    @db.VarChar(50)
+  parentId  Int       @default(0) @map("parent_id")
+  level     Int       @default(1)
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @default(now()) @updatedAt @map("updated_at")
+  products  Product[]
+
+  @@index([parentId], map: "idx_parent")
+  @@map("categories")
+}
+
+model Product {
+  id           Int            @id @default(autoincrement())
+  categoryId   Int            @map("category_id")
+  name         String         @db.VarChar(200)
+  content      String?        @db.Text
+  mainImage    String?        @map("main_image") @db.VarChar(255)
+  detailImages Json?         @map("detail_images") @db.Json 
+  is_promotion Int?           @default(0) @db.TinyInt
+  status       ProductStatus? @default(DRAFT)
+  productCode  String         @unique(map: "idx_product_code") @map("product_code") @db.VarChar(50)
+  createdAt    DateTime       @default(now()) @map("created_at")
+  updatedAt    DateTime       @default(now()) @updatedAt @map("updated_at")
+  salesCount   Int?           @default(0) @map("sales_count")
+  category     Category       @relation(fields: [categoryId], references: [id])
+  skus         Sku[]
+  cartItems    UserCartItem[]
+  favorites    UserFavorite[]
+
+  @@index([name, status], map: "idx_name_status")
+  @@index([is_promotion, status], map: "idx_promotion_status")
+  @@index([categoryId, status], map: "idx_category_status")
+  @@index([name, productCode], map: "idx_name_code")
+  @@map("products")
+}
+
+model Sku {
+  id              Int         @id @default(autoincrement())
+  productId       Int         @map("product_id")
+  price           Int         @map("price")
+  stock           Int?        @default(0)
+  lockedStock     Int?        @default(0) @map("locked_stock")
+  skuCode         String?     @map("sku_code") @db.VarChar(100)
+  createdAt       DateTime    @default(now()) @map("created_at")
+  updatedAt       DateTime    @default(now()) @updatedAt @map("updated_at")
+  image           String?     @db.VarChar(255)
+  promotion_price Int?
+  orderItems      OrderItem[]
+  sku_specs       SkuSpec[]
+  product         Product     @relation(fields: [productId], references: [id], onUpdate: Restrict, map: "skus_ibfk_1")
+  stockLogs       StockLog[]
+
+  @@index([productId], map: "product_id")
+  @@map("skus")
+}
+
+model Spec {
+  id       Int         @id @default(autoincrement())
+  name     String      @unique(map: "name") @db.VarChar(50)
+  skuSpecs SkuSpec[]
+  values   SpecValue[]
+
+  @@map("specs")
+}
+
+model SpecValue {
+  id       Int       @id @default(autoincrement())
+  specId   Int       @map("spec_id")
+  value    String    @db.VarChar(50)
+  skuSpecs SkuSpec[]
+  spec     Spec      @relation(fields: [specId], references: [id], onUpdate: Restrict, map: "spec_values_ibfk_1")
+
+  @@unique([specId, value], name: "spec_id", map: "spec_id")
+  @@map("spec_values")
+}
+
+model SkuSpec {
+  sku_id      Int
+  specId      Int       @map("spec_id")
+  specValueId Int       @map("spec_value_id")
+  skus        Sku       @relation(fields: [sku_id], references: [id], onUpdate: Restrict, map: "sku_specs_ibfk_1")
+  spec        Spec      @relation(fields: [specId], references: [id], onUpdate: Restrict, map: "sku_specs_ibfk_2")
+  specValue   SpecValue @relation(fields: [specValueId], references: [id], onUpdate: Restrict, map: "sku_specs_ibfk_3")
+
+  @@id([sku_id, specId, specValueId])
+  @@index([specId, specValueId], map: "idx_spec_value")
+  @@index([specValueId], map: "sku_specs_ibfk_3")
+  @@map("sku_specs")
+}
+
+model Order {
+  id              String       @id @default(uuid()) @db.VarChar(36)
+  orderNo         String       @unique(map: "order_no") @map("order_no") @db.VarChar(32)
+  userId          String       @map("user_id") @db.VarChar(36)
+  orderStatus     Int?         @default(1) @map("order_status") @db.TinyInt
+  paymentStatus   Int?         @default(0) @map("payment_status") @db.TinyInt
+  shippingAddress Json         @map("shipping_address")
+  totalAmount     Int          @map("total_amount")
+  paymentAmount   Int          @map("payment_amount")
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @default(now()) @updatedAt @map("updated_at")
+  orderItems      OrderItem[]
+  user            User         @relation(fields: [userId], references: [id], onUpdate: Restrict, map: "orders_ibfk_1")
+  paymentLogs     PaymentLog[]
+
+  @@index([userId, orderStatus], map: "idx_user_status")
+  @@index([orderStatus, createdAt], map: "idx_status_created")
+  @@index([createdAt], map: "idx_created")
+  @@map("orders")
+}
+
+model OrderItem {
+  id          Int      @id @default(autoincrement())
+  orderId     String   @map("order_id") @db.VarChar(36)
+  skuId       Int      @map("sku_id")
+  productName String   @map("product_name") @db.VarChar(200)
+  mainImage   String   @map("main_image") @db.VarChar(255)
+  skuSpecs    Json     @map("sku_specs")
+  quantity    Int
+  unitPrice   Int      @map("unit_price")
+  totalPrice  Int      @map("total_price")
+  createdAt   DateTime @default(now()) @map("created_at")
+  order       Order    @relation(fields: [orderId], references: [id], onUpdate: Restrict, map: "order_items_ibfk_1")
+  sku         Sku      @relation(fields: [skuId], references: [id], onUpdate: Restrict, map: "order_items_ibfk_2")
+
+  @@index([skuId, orderId], map: "idx_sku_order")
+  @@index([orderId], map: "order_id")
+  @@map("order_items")
+}
+
+model PaymentLog {
+  id            Int      @id @default(autoincrement())
+  orderId       String   @map("order_id") @db.VarChar(36)
+  amount        Int
+  paymentType   String   @map("payment_type") @db.VarChar(20)
+  transactionId String?  @map("transaction_id") @db.VarChar(64)
+  status        Int      @db.TinyInt
+  createdAt     DateTime @default(now()) @map("created_at")
+  order         Order    @relation(fields: [orderId], references: [id], onUpdate: Restrict, map: "payment_logs_ibfk_1")
+
+  @@index([transactionId(length: 32)], map: "idx_transaction")
+  @@index([orderId], map: "order_id")
+  @@map("payment_logs")
+}
+
+model StockLog {
+  id             Int      @id @default(autoincrement())
+  skuId          Int      @map("sku_id")
+  changeQuantity Int      @map("change_quantity")
+  currentStock   Int      @map("current_stock")
+  type           Int      @db.TinyInt
+  orderNo        String?  @map("order_no") @db.VarChar(50)
+  remark         String?  @db.VarChar(255)
+  operator       String?  @db.VarChar(50)
+  createdAt      DateTime @default(now()) @map("created_at")
+  sku            Sku      @relation(fields: [skuId], references: [id])
+  
+  @@map("stock_logs")
+}
+
+model UserAddress {
+   id            Int      @id @default(autoincrement())
+  userId        String   @map("user_id") @db.VarChar(36)
+  receiverName  String   @map("receiver_name") @db.VarChar(50)
+  receiverPhone String   @map("receiver_phone") @db.VarChar(20)
+  province      String   @db.VarChar(50)
+  city          String   @db.VarChar(50)
+  detailAddress String   @map("detail_address") @db.VarChar(255)
+  isDefault     Int?     @default(0) @map("is_default") @db.TinyInt
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @default(now()) @updatedAt @map("updated_at")
+  user          User     @relation(fields: [userId], references: [id], onUpdate: Restrict, map: "user_addresses_ibfk_1")
+
+  @@index([userId], map: "idx_user_id")
+  @@map("user_addresses")
+}
+
+model UserCartItem {
+  id        Int      @id @default(autoincrement())
+  userId    String   @map("user_id") @db.VarChar(36)
+  productId Int      @map("product_id")
+  skuId     Int      @map("sku_id")
+  quantity  Int      @default(1)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+  product   Product  @relation(fields: [productId], references: [id])
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@index([userId], map: "idx_user")
+  @@index([productId], map: "user_cart_items_product_id_fkey")
+  @@map("user_cart_items")
+}
+
+model UserFavorite {
+   id        Int      @id @default(autoincrement())
+  userId    String   @map("user_id") @db.VarChar(36)
+  productId Int      @map("product_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  product   Product  @relation(fields: [productId], references: [id])
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@unique([userId, productId], name: "uk_user_product", map: "uk_user_product")
+  @@index([productId], map: "user_favorites_product_id_fkey")
+  @@map("user_favorites")
+}
+
+model Banner {
+  id        Int      @id @default(autoincrement())
+  imageUrl  String   @map("image_url") @db.VarChar(255)
+  title     String   @db.VarChar(100)
+  content   String?  @db.Text
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@map("banner")
+}
+
+model Image {
+  id        Int      @id @default(autoincrement())
+  imageUrl  String   @map("image_url") @db.VarChar(255)
+  isUsed    Int      @default(0) @map("is_used") @db.TinyInt
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("images")
+}
+
+enum ProductStatus {
+  DRAFT        
+  ONLINE       
+  OFFLINE      
+  DELETED      
+}
+
