@@ -4,6 +4,8 @@ import userRoutes from './user';
 import productRoutes from './product';
 import favoriteRoutes from './favorite';
 import addressRoutes from './address';
+import cartRoutes from './cart';
+import orderRoutes from './order';
 
 const router = Router();
 
@@ -18,5 +20,11 @@ router.use('/favorites', favoriteRoutes);
 
 // 地址相关路由
 router.use('/addresses', addressRoutes);
+
+// 购物车相关路由
+router.use('/cart', cartRoutes);
+
+// 订单相关路由
+router.use('/orders', orderRoutes);
 
 export default router;

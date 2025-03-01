@@ -10,6 +10,8 @@ import {
 } from './utils/http.utils';
 import './config';  // 导入配置，会自动初始化数据库和Redis连接
 import { prisma, redisClient } from './config';
+// 导入订单定时任务服务
+import { orderScheduleService } from './services/orderSchedule.service';
 
 const app: Express = express();
 const port = process.env.PORT || 3000;
@@ -47,6 +49,8 @@ app.use(globalErrorHandler);
 const startServer = () => {
       const server = app.listen(port, () => {
             console.log(`✅ Server is running at http://localhost:${port}`);
+            // 启动订单定时任务
+            orderScheduleService.startScheduleTasks();
       });
 
       // 添加一个标志来防止多次关闭
