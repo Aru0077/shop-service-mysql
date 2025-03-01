@@ -1,7 +1,7 @@
 // src/routes/index.ts  // 总路由
 import { Router } from 'express';
 import adminRoutes from './admin'
-// import { shopRoutes } from './shop'
+import shopRoutes from './shop'
 
 const router = Router();
 
@@ -9,7 +9,7 @@ const router = Router();
 router.use('/admin', adminRoutes )
 
 // 购物网站路由
-// router.use('/shop', shopRoutes)
+router.use('/shop', shopRoutes)
 
 
 export default router;
