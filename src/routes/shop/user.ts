@@ -13,7 +13,7 @@ const router = Router();
 // 创建登录限流中间件
 const loginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15分钟窗口期
-    max: 5, // 限制每个IP在15分钟内最多5次尝试
+    max: 25, // 限制每个IP在15分钟内最多5次尝试
     message: { success: false, message: '尝试登录次数过多，请稍后再试' },
     standardHeaders: true,
     legacyHeaders: false,

@@ -130,7 +130,7 @@ class OrderScheduleService {
             // 每5分钟检查一次需要自动完成的订单
             setInterval(() => this.completeOrders(), 5 * 60 * 1000);
 
-            console.log('订单定时任务已启动');
+            console.log('✅ 订单定时任务已启动');
       }
 }
 
