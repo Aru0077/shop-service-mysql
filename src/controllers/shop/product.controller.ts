@@ -456,4 +456,66 @@ export const productController = {
 
             res.sendSuccess(homeData);
       }),
+
+      // 搜索商品
+      searchProducts: asyncHandler(async (req: Request, res: Response) => {
+            const { keyword, page = '1', limit = '10' } = req.query;
+            const pageNumber = Number(page);
+            const limitNumber = Number(limit);
+            const skip = (pageNumber - 1) * limitNumber;
+
+            const cacheKey = `shop:products:search:${keyword}:${page}:${limit}`;
+
+            const searchResults = await cacheUtils.getOrSet(cacheKey, async () => {
+                  // 查询匹配商品总数
+                  const total = await prisma.product.count({
+                        where: {
+                              status: ProductStatus.ONLINE,
+                              name: {
+                                    contains: keyword as string
+                              }
+                        }
+                  });
+
+                  // 查询匹配商品列表
+                  const products = await prisma.product.findMany({
+                        where: {
+                              status: ProductStatus.ONLINE,
+                              name: {
+                                    contains: keyword as string
+                              }
+                        },
+                        include: {
+                              category: {
+                                    select: {
+                                          id: true,
+                                          name: true
+                                    }
+                              },
+                              skus: {
+                                    select: {
+                                          id: true,
+                                          price: true,
+                                          promotion_price: true,
+                                          stock: true
+                                    }
+                              }
+                        },
+                        orderBy: {
+                              createdAt: 'desc'
+                        },
+                        skip,
+                        take: limitNumber
+                  });
+
+                  return {
+                        total,
+                        page: pageNumber,
+                        limit: limitNumber,
+                        data: products
+                  };
+            }, 300); // 缓存5分钟
+
+            res.sendSuccess(searchResults);
+      }),
 };

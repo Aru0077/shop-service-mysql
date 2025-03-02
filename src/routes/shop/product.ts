@@ -5,7 +5,8 @@ import { validateRequest } from '../../middlewares/validateResult';
 import {
       paginationSchema,
       categoryProductsSchema,
-      productDetailSchema
+      productDetailSchema,
+      searchProductsSchema
 } from '../../validators/shop/product.validator';
 
 const router = Router();
@@ -44,11 +45,20 @@ router.get(
       productController.getCategoryProducts
 );
 
+// 搜索商品
+router.get(
+      '/search',
+      validateRequest(searchProductsSchema),
+      productController.searchProducts
+);
+
 // 获取商品详情
 router.get(
       '/:id',
       validateRequest(productDetailSchema),
       productController.getProductDetail
 );
+
+
 
 export default router;

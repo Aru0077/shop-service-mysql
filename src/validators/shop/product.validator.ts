@@ -49,3 +49,22 @@ export const productDetailSchema = z.object({
             id: z.string().regex(/^\d+$/, '无效的商品ID'),
       }),
 });
+
+// 搜索商品验证
+export const searchProductsSchema = z.object({
+      query: z.object({
+            keyword: z.string().min(1, '搜索关键词不能为空'),
+            page: z.string()
+                  .regex(/^\d+$/, '页码必须为数字')
+                  .transform(Number)
+                  .refine(val => val >= 1, '页码必须大于0')
+                  .optional()
+                  .default('1'),
+            limit: z.string()
+                  .regex(/^\d+$/, '每页数量必须为数字')
+                  .transform(Number)
+                  .refine(val => val >= 1 && val <= 50, '每页数量必须在1-50之间')
+                  .optional()
+                  .default('10'),
+      }),
+});
