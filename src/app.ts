@@ -20,7 +20,7 @@ const port = process.env.PORT || 3000;
 app.use(morgan('dev'))
 // src/app.ts 中修改 CORS 配置
 app.use(cors({
-      origin: process.env.FRONTEND_URL || 'http://localhost:5173', // 指定前端域名
+      origin: '*', // 指定前端域名
       credentials: true,
       methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
       maxAge: 86400 // 预检请求缓存1天

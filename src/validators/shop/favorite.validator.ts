@@ -44,6 +44,9 @@ export const getFavoritesSchema = z.object({
                   .transform(Number)
                   .refine(val => val >= 1 && val <= 50, '每页数量必须在1-50之间')
                   .optional()
-                  .default('10')
+                  .default('10'),
+            idsOnly: z.string()
+                  .optional()
+                  .default('false')
       })
 });

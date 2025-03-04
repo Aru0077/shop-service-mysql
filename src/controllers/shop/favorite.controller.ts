@@ -115,26 +115,46 @@ export const favoriteController = {
       // 分页获取收藏商品列表
       getFavorites: asyncHandler(async (req: Request, res: Response) => {
             const userId = req.shopUser?.id;
-            const { page = '1', limit = '10' } = req.query;
+            const { page = '1', limit = '10', idsOnly = 'false' } = req.query;
             const pageNumber = Number(page);
             const limitNumber = Number(limit);
             const skip = (pageNumber - 1) * limitNumber;
+            const getIdsOnly = idsOnly === 'true';
 
             if (!userId) {
                   throw new AppError(401, 'fail', '请先登录');
             }
 
+            // 如果只需要ID列表，则直接查询ID（不分页）
+            if (getIdsOnly) {
+                  const favorites = await prisma.userFavorite.findMany({
+                        where: { userId },
+                        select: { productId: true }
+                  });
+
+                  return res.sendSuccess({
+                        total: favorites.length,
+                        data: favorites.map(item => item.productId)
+                  });
+            }
+
             // 查询收藏商品总数
             const total = await prisma.userFavorite.count({
                   where: {
-                        userId
+                        userId,
+                        product: {
+                              status: ProductStatus.ONLINE
+                        }
                   }
             });
 
             // 查询收藏商品列表
             const favorites = await prisma.userFavorite.findMany({
                   where: {
-                        userId
+                        userId,
+                        product: {
+                              status: ProductStatus.ONLINE
+                        }
                   },
                   include: {
                         product: {
