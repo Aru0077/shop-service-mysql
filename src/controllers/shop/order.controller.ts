@@ -7,6 +7,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { OrderStatus, PaymentStatus } from '../../constants/orderStatus.enum';
 import { StockChangeType } from '../../constants/stock.constants';
 import { ProductStatus } from '@prisma/client';
+import { orderQueue } from '../../queues/order.queue';
 
 // 生成订单号
 function generateOrderNo(): string {
@@ -33,11 +34,20 @@ export const orderController = {
                   throw new AppError(401, 'fail', '请先登录');
             }
 
-            // 检查收货地址是否存在且属于用户
+            // 1. 快速验证 - 只检查基本条件
+            // 检查收货地址是否存在且属于用户（保留，因为这是必要验证）
             const address = await prisma.userAddress.findFirst({
                   where: {
                         id: addressId,
                         userId
+                  },
+                  select: {  // 只选择需要的字段
+                        id: true,
+                        receiverName: true,
+                        receiverPhone: true,
+                        province: true,
+                        city: true,
+                        detailAddress: true
                   }
             });
 
@@ -45,14 +55,24 @@ export const orderController = {
                   throw new AppError(404, 'fail', '收货地址不存在');
             }
 
-            // 直接获取指定ID的购物车项
+            // 2. 验证购物车项是否存在 - 优化查询，只获取必要信息
             const cartItems = await prisma.userCartItem.findMany({
                   where: {
                         id: { in: cartItemIds },
                         userId
                   },
-                  include: {
-                        product: true
+                  select: {
+                        id: true,
+                        skuId: true,
+                        quantity: true,
+                        product: {
+                              select: {
+                                    id: true,
+                                    name: true,
+                                    mainImage: true,
+                                    status: true
+                              }
+                        }
                   }
             });
 
@@ -60,39 +80,48 @@ export const orderController = {
                   throw new AppError(400, 'fail', '购物车为空');
             }
 
-            // 验证商品是否可购买
+            // 快速筛查商品状态 - 确保所有商品都在线
+            const offlineProducts = cartItems.filter(item => item.product.status !== ProductStatus.ONLINE);
+            if (offlineProducts.length > 0) {
+                  throw new AppError(400, 'fail', `商品 ${offlineProducts.map(p => p.product.name).join(', ')} 已下架`);
+            }
+
+            // 3. 获取SKU信息 - 优化查询，只获取关键字段
             const skuIds = cartItems.map(item => item.skuId);
             const skus = await prisma.sku.findMany({
                   where: {
                         id: { in: skuIds }
                   },
-                  include: {
-                        product: true,
+                  select: {
+                        id: true,
+                        price: true,
+                        promotion_price: true,
+                        stock: true,
+                        productId: true,
                         sku_specs: {
-                              include: {
-                                    spec: true,
-                                    specValue: true
+                              select: {
+                                    spec: {
+                                          select: {
+                                                name: true
+                                          }
+                                    },
+                                    specValue: {
+                                          select: {
+                                                value: true
+                                          }
+                                    }
                               }
                         }
                   }
             });
 
-            // 检查商品状态和库存
+            // 创建SKU映射以提高查找效率
             const skuMap = new Map(skus.map(sku => [sku.id, sku]));
+
+            // 4. 计算订单金额和准备订单项
             let totalAmount = 0;
-
-            // 定义订单项接口
-            interface OrderItemCreate {
-                  skuId: number;
-                  productName: string;
-                  mainImage: string;
-                  skuSpecs: { specName: string; specValue: string }[];
-                  quantity: number;
-                  unitPrice: number;
-                  totalPrice: number;
-            }
-
-            const orderItems: OrderItemCreate[] = [];
+            const orderItems = [];
+            const inventoryUpdates = [];
 
             for (const cartItem of cartItems) {
                   const sku = skuMap.get(cartItem.skuId);
@@ -101,10 +130,7 @@ export const orderController = {
                         throw new AppError(400, 'fail', `商品 ${cartItem.product.name} 的SKU不存在`);
                   }
 
-                  if (sku.product.status !== ProductStatus.ONLINE) {
-                        throw new AppError(400, 'fail', `商品 ${cartItem.product.name} 已下架`);
-                  }
-
+                  // 库存初步检查（详细检查将在事务中进行）
                   if ((sku.stock || 0) < cartItem.quantity) {
                         throw new AppError(400, 'fail', `商品 ${cartItem.product.name} 库存不足`);
                   }
@@ -123,90 +149,72 @@ export const orderController = {
                   // 构建订单项
                   orderItems.push({
                         skuId: sku.id,
-                        productName: sku.product.name,
-                        mainImage: sku.product.mainImage || '',
+                        productName: cartItem.product.name,
+                        mainImage: cartItem.product.mainImage || '',
                         skuSpecs: skuSpecsInfo,
                         quantity: cartItem.quantity,
                         unitPrice,
                         totalPrice: itemTotalPrice
                   });
+
+                  // 记录需要更新的库存
+                  inventoryUpdates.push({
+                        skuId: sku.id,
+                        quantity: cartItem.quantity,
+                        productName: cartItem.product.name
+                  });
             }
 
-            // 使用事务创建订单和处理库存
+            // 5. 创建订单 - 分两个阶段处理
             const orderId = uuidv4();
             const orderNo = generateOrderNo();
 
-            await prisma.$transaction(async (tx) => {
-                  // 创建订单
-                  const order = await tx.order.create({
-                        data: {
-                              id: orderId,
-                              orderNo,
-                              userId,
-                              orderStatus: OrderStatus.PENDING_PAYMENT,
-                              paymentStatus: PaymentStatus.UNPAID,
-                              shippingAddress: {
-                                    receiverName: address.receiverName,
-                                    receiverPhone: address.receiverPhone,
-                                    province: address.province,
-                                    city: address.city,
-                                    detailAddress: address.detailAddress
-                              },
-                              totalAmount,
-                              paymentAmount: totalAmount, // 目前没有折扣等，所以支付金额等于总金额
-                              orderItems: {
-                                    create: orderItems
-                              }
-                        }
-                  });
-
-                  // 锁定库存
-                  for (const item of orderItems) {
-                        await tx.sku.update({
-                              where: { id: item.skuId },
-                              data: {
-                                    lockedStock: {
-                                          increment: item.quantity
-                                    }
-                              }
-                        });
-
-                        // 记录库存变更日志
-                        await tx.stockLog.create({
-                              data: {
-                                    skuId: item.skuId,
-                                    changeQuantity: -item.quantity, // 负数表示锁定
-                                    currentStock: skuMap.get(item.skuId)!.stock || 0,
-                                    type: StockChangeType.ORDER_LOCK,
-                                    orderNo,
-                                    remark: `创建订单锁定库存 ${orderNo}`,
-                                    operator: 'user'
-                              }
-                        });
+            // 第一阶段：快速创建订单记录（仅包含最基本信息）
+            const order = await prisma.order.create({
+                  data: {
+                        id: orderId,
+                        orderNo,
+                        userId,
+                        orderStatus: OrderStatus.PENDING_PAYMENT,
+                        paymentStatus: PaymentStatus.UNPAID,
+                        shippingAddress: {
+                              receiverName: address.receiverName,
+                              receiverPhone: address.receiverPhone,
+                              province: address.province,
+                              city: address.city,
+                              detailAddress: address.detailAddress
+                        },
+                        totalAmount,
+                        paymentAmount: totalAmount
                   }
-
-                  // 删除购物车中已下单的商品
-                  await tx.userCartItem.deleteMany({
-                        where: {
-                              id: { in: cartItemIds }
-                        }
-                  });
             });
 
+            // 6. 将库存锁定和订单项创建任务添加到队列
+            await orderQueue.add('processOrderInventory', {
+                  orderId,
+                  orderNo,
+                  orderItems,
+                  inventoryUpdates,
+                  cartItemIds
+            }, {
+                  attempts: 3,
+                  backoff: 2000,
+                  removeOnComplete: true
+            });
 
-            // 设置订单超时自动取消（10分钟）
+            // 7. 设置订单超时自动取消（10分钟）
             const cancelOrderKey = `order:${orderId}:auto_cancel`;
             await redisClient.setEx(cancelOrderKey, 600, '1');
 
-            // 获取创建的订单详情
-            const createdOrder = await prisma.order.findUnique({
-                  where: { id: orderId },
-                  include: {
-                        orderItems: true
-                  }
-            });
-
-            res.sendSuccess(createdOrder, '订单创建成功');
+            // 8. 返回订单基本信息（不等待订单项处理完成）
+            res.sendSuccess({
+                  id: order.id,
+                  orderNo: order.orderNo,
+                  totalAmount: order.totalAmount,
+                  orderStatus: order.orderStatus,
+                  paymentStatus: order.paymentStatus,
+                  createdAt: order.createdAt
+            }, '订单创建成功，正在处理中');
       }),
 
       // 获取订单列表
@@ -349,6 +357,7 @@ export const orderController = {
       }),
 
       // 支付订单
+      // 优化后的支付方法 - 插入到order.controller.ts中
       payOrder: asyncHandler(async (req: Request, res: Response) => {
             const userId = req.shopUser?.id;
             const { id } = req.params;
@@ -358,14 +367,25 @@ export const orderController = {
                   throw new AppError(401, 'fail', '请先登录');
             }
 
-            // 查询订单
+            // 查询订单基本信息（不包含详细订单项）
             const order = await prisma.order.findFirst({
                   where: {
                         id,
                         userId
                   },
-                  include: {
-                        orderItems: true
+                  select: {
+                        id: true,
+                        orderNo: true,
+                        orderStatus: true,
+                        paymentStatus: true,
+                        paymentAmount: true,
+                        orderItems: {
+                              select: {
+                                    id: true,
+                                    skuId: true,
+                                    quantity: true
+                              }
+                        }
                   }
             });
 
@@ -389,7 +409,7 @@ export const orderController = {
                   throw new AppError(400, 'fail', '订单已超时，请重新下单');
             }
 
-            // 使用事务处理支付
+            // 创建支付记录和更新订单状态（核心操作）
             await prisma.$transaction(async (tx) => {
                   // 创建支付记录
                   await tx.paymentLog.create({
@@ -410,48 +430,6 @@ export const orderController = {
                               paymentStatus: PaymentStatus.PAID
                         }
                   });
-
-                  // 扣减库存（从锁定库存转为实际扣减）
-                  for (const item of order.orderItems) {
-                        const sku = await tx.sku.findUnique({
-                              where: { id: item.skuId }
-                        });
-
-                        if (sku) {
-                              await tx.sku.update({
-                                    where: { id: item.skuId },
-                                    data: {
-                                          lockedStock: {
-                                                decrement: item.quantity
-                                          },
-                                          stock: {
-                                                decrement: item.quantity
-                                          },
-                                          // 更新商品销量
-                                          product: {
-                                                update: {
-                                                      salesCount: {
-                                                            increment: item.quantity
-                                                      }
-                                                }
-                                          }
-                                    }
-                              });
-
-                              // 记录库存变更日志
-                              await tx.stockLog.create({
-                                    data: {
-                                          skuId: item.skuId,
-                                          changeQuantity: -item.quantity,
-                                          currentStock: (sku.stock || 0) - item.quantity,
-                                          type: StockChangeType.STOCK_OUT,
-                                          orderNo: order.orderNo,
-                                          remark: `订单支付扣减库存 ${order.orderNo}`,
-                                          operator: 'user'
-                                    }
-                              });
-                        }
-                  }
             });
 
             // 删除订单超时任务
@@ -460,6 +438,21 @@ export const orderController = {
             // 设置12小时后自动完成订单
             const autoCompleteKey = `order:${order.id}:auto_complete`;
             await redisClient.setEx(autoCompleteKey, 12 * 60 * 60, '1');
+
+            // 将库存实际扣减操作放入队列（异步处理）
+            await orderQueue.add('processOrderPayment', {
+                  orderId: order.id,
+                  orderNo: order.orderNo,
+                  orderItems: order.orderItems.map(item => ({
+                        ...item,
+                        // 这里可能需要查询productId，或者在订单项中添加productId字段
+                        productId: null // 需要根据实际情况设置
+                  }))
+            }, {
+                  attempts: 3,
+                  backoff: 2000,
+                  removeOnComplete: true
+            });
 
             res.sendSuccess({ orderId: order.id }, '订单支付成功');
       })

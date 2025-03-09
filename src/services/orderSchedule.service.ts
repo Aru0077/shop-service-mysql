@@ -5,73 +5,85 @@ import { StockChangeType } from '../constants/stock.constants';
 
 class OrderScheduleService {
       // 处理超时未支付订单
+      // src/services/orderSchedule.service.ts 优化版
       async cancelUnpaidOrders() {
             try {
                   const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
 
-                  // 查找超过10分钟未支付的订单
+                  // 查找超时订单及其订单项（一次性获取所有数据）
                   const unpaidOrders = await prisma.order.findMany({
                         where: {
                               orderStatus: OrderStatus.PENDING_PAYMENT,
                               paymentStatus: PaymentStatus.UNPAID,
-                              createdAt: {
-                                    lt: tenMinutesAgo
-                              }
+                              createdAt: { lt: tenMinutesAgo }
                         },
                         include: {
-                              orderItems: true
+                              orderItems: {
+                                    select: { id: true, skuId: true, quantity: true }
+                              }
                         }
                   });
 
-                  if (unpaidOrders.length === 0) {
-                        return;
-                  }
-
+                  if (unpaidOrders.length === 0) return;
                   console.log(`找到 ${unpaidOrders.length} 个超时未支付订单，正在取消...`);
 
-                  // 使用事务处理每个订单取消
+                  // 收集所有需要处理的SKU ID
+                  const skuIds = [...new Set(unpaidOrders.flatMap(order =>
+                        order.orderItems.map(item => item.skuId)
+                  ))];
+
+                  // 一次性获取所有相关SKU信息
+                  const skus = await prisma.sku.findMany({
+                        where: { id: { in: skuIds } }
+                  });
+                  const skuMap = new Map(skus.map(sku => [sku.id, sku]));
+
+                  // 为每个订单创建单独的事务，并增加超时时间
                   for (const order of unpaidOrders) {
                         await prisma.$transaction(async (tx) => {
-                              // 更新订单状态为取消
+                              // 1. 更新订单状态
                               await tx.order.update({
                                     where: { id: order.id },
-                                    data: {
-                                          orderStatus: OrderStatus.CANCELLED
-                                    }
+                                    data: { orderStatus: OrderStatus.CANCELLED }
                               });
 
-                              // 释放被锁定的库存
+                              // 2. 批量准备库存更新数据
+                              const stockUpdates = [];
+                              const stockLogs = [];
+
                               for (const item of order.orderItems) {
-                                    const sku = await tx.sku.findUnique({
-                                          where: { id: item.skuId }
+                                    const sku = skuMap.get(item.skuId);
+                                    if (!sku) continue;
+
+                                    stockUpdates.push({
+                                          id: item.skuId,
+                                          lockedStock: { decrement: item.quantity }
                                     });
 
-                                    if (sku) {
-                                          // 释放锁定库存
-                                          await tx.sku.update({
-                                                where: { id: item.skuId },
-                                                data: {
-                                                      lockedStock: {
-                                                            decrement: item.quantity
-                                                      }
-                                                }
-                                          });
-
-                                          // 记录库存变更日志
-                                          await tx.stockLog.create({
-                                                data: {
-                                                      skuId: item.skuId,
-                                                      changeQuantity: item.quantity,
-                                                      currentStock: sku.stock || 0,
-                                                      type: StockChangeType.ORDER_RELEASE,
-                                                      orderNo: order.orderNo,
-                                                      remark: `取消超时未支付订单 ${order.orderNo}`,
-                                                      operator: 'system'
-                                                }
-                                          });
-                                    }
+                                    stockLogs.push({
+                                          skuId: item.skuId,
+                                          changeQuantity: item.quantity,
+                                          currentStock: sku.stock || 0,
+                                          type: StockChangeType.ORDER_RELEASE,
+                                          orderNo: order.orderNo,
+                                          remark: `取消超时未支付订单 ${order.orderNo}`,
+                                          operator: 'system'
+                                    });
                               }
-                        });
+
+                              // 3. 使用事务批量更新库存（如果Prisma支持批量更新）
+                              for (const update of stockUpdates) {
+                                    await tx.sku.update({
+                                          where: { id: update.id },
+                                          data: { lockedStock: update.lockedStock }
+                                    });
+                              }
+
+                              // 4. 批量创建库存日志
+                              await tx.stockLog.createMany({
+                                    data: stockLogs
+                              });
+                        }, { timeout: 10000 }); // 增加事务超时时间
                   }
 
                   console.log(`成功取消 ${unpaidOrders.length} 个超时未支付订单`);
@@ -79,7 +91,6 @@ class OrderScheduleService {
                   console.error('取消超时未支付订单失败:', error);
             }
       }
-
       // 处理已支付订单自动完成
       async completeOrders() {
             try {
