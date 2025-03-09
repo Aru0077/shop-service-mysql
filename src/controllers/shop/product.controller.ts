@@ -309,24 +309,26 @@ export const productController = {
             const { id } = req.params;
             const productId = Number(id);
 
-            const cacheKey = `shop:product:detail:${productId}`;
-
-            const productDetail = await cacheUtils.getOrSet(cacheKey, async () => {
+            // 1. 优先返回基础信息 - 使用更短的缓存时间
+            const basicCacheKey = `shop:product:basic:${productId}`;
+            const basicProductDetail = await cacheUtils.getOrSet(basicCacheKey, async () => {
                   const product = await prisma.product.findUnique({
                         where: {
                               id: productId,
                               status: ProductStatus.ONLINE
                         },
-                        include: {
-                              category: true,
-                              skus: {
-                                    include: {
-                                          sku_specs: {
-                                                include: {
-                                                      spec: true,
-                                                      specValue: true
-                                                }
-                                          }
+                        select: {
+                              id: true,
+                              name: true,
+                              content: true,
+                              mainImage: true,
+                              detailImages: true,
+                              is_promotion: true,
+                              categoryId: true,
+                              category: {
+                                    select: {
+                                          id: true,
+                                          name: true
                                     }
                               }
                         }
@@ -336,14 +338,35 @@ export const productController = {
                         throw new AppError(404, 'fail', '商品不存在或已下架');
                   }
 
-                  // 获取商品规格信息
+                  return product;
+            }, 600); // 10分钟缓存
+
+            // 2. 异步加载SKU和规格信息 - 使用独立缓存键
+            const skuCacheKey = `shop:product:skus:${productId}`;
+            const skuData = await cacheUtils.getOrSet(skuCacheKey, async () => {
+                  const skus = await prisma.sku.findMany({
+                        where: {
+                              productId,
+                              product: {
+                                    status: ProductStatus.ONLINE
+                              }
+                        },
+                        include: {
+                              sku_specs: {
+                                    include: {
+                                          spec: true,
+                                          specValue: true
+                                    }
+                              }
+                        }
+                  });
+
+                  // 获取规格矩阵，用于前端渲染规格选择器
                   const specs = await prisma.spec.findMany({
                         where: {
                               skuSpecs: {
                                     some: {
-                                          skus: {
-                                                productId
-                                          }
+                                          skus: { productId }
                                     }
                               }
                         },
@@ -352,9 +375,7 @@ export const productController = {
                                     where: {
                                           skuSpecs: {
                                                 some: {
-                                                      skus: {
-                                                            productId
-                                                      }
+                                                      skus: { productId }
                                                 }
                                           }
                                     }
@@ -362,13 +383,34 @@ export const productController = {
                         }
                   });
 
-                  return {
-                        ...product,
-                        specs
-                  };
-            }, 600); // 缓存10分钟
+                  // 构建有效规格组合映射，辅助前端规格选择
+                  const validSpecCombinations = buildSpecCombinationsMap(skus);
 
-            res.sendSuccess(productDetail);
+                  return {
+                        skus,
+                        specs,
+                        validSpecCombinations
+                  };
+            }, 300); // 5分钟缓存
+
+            // 3. 合并数据并返回
+            const completeProductDetail = {
+                  ...basicProductDetail,
+                  ...skuData
+            };
+
+            // 4. 异步记录商品访问（不阻塞响应）
+            setImmediate(() => {
+                  try {
+                        // 此处可添加访问统计逻辑，如Redis计数器递增
+                        // 可放入队列进行异步处理
+                  } catch (err) {
+                        // 记录错误但不影响主流程
+                        console.error('记录商品访问统计失败:', err);
+                  }
+            });
+
+            res.sendSuccess(completeProductDetail);
       }),
 
       // 获取首页数据（最新商品、热销商品和最新banner）
@@ -519,3 +561,21 @@ export const productController = {
             res.sendSuccess(searchResults);
       }),
 };
+
+
+// 辅助函数：构建有效规格组合映射
+function buildSpecCombinationsMap(skus: any[]) {
+      const combinations: Record<string, { skuId: number, stock: number, price: number }> = {};
+
+      skus.forEach(sku => {
+            // 将sku的规格组合转换为唯一键
+            const specValues = sku.sku_specs.map((spec: any) => spec.specValueId).sort().join('_');
+            combinations[specValues] = {
+                  skuId: sku.id,
+                  stock: sku.stock || 0,
+                  price: sku.promotion_price || sku.price
+            };
+      });
+
+      return combinations;
+}

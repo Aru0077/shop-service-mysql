@@ -25,8 +25,7 @@ function generateOrderNo(): string {
 
 
 export const orderController = {
-      // 创建订单
-      // 创建订单
+      // 创建订单  - 优化后的创建订单方法 - 插入到order.controller.ts中
       createOrder: asyncHandler(async (req: Request, res: Response) => {
             const userId = req.shopUser?.id;
             const { addressId, cartItemIds, remark } = req.body;
@@ -35,233 +34,300 @@ export const orderController = {
                   throw new AppError(401, 'fail', '请先登录');
             }
 
-            // 1. 快速验证 - 只检查基本条件
-            // 检查收货地址是否存在且属于用户
-            const address = await prisma.userAddress.findFirst({
-                  where: {
-                        id: addressId,
-                        userId
-                  },
-                  select: {  // 只选择需要的字段
-                        id: true,
-                        receiverName: true,
-                        receiverPhone: true,
-                        province: true,
-                        city: true,
-                        detailAddress: true
-                  }
-            });
+            // 1. 幂等性控制 - 防止重复下单
+            const idempotencyKey = `order:idempotency:${userId}:${cartItemIds.join('_')}`;
+            const existingOrderId = await redisClient.get(idempotencyKey);
 
-            if (!address) {
-                  throw new AppError(404, 'fail', '收货地址不存在');
-            }
-
-            // 2. 验证购物车项是否存在 - 优化查询，只获取必要信息
-            const cartItems = await prisma.userCartItem.findMany({
-                  where: {
-                        id: { in: cartItemIds },
-                        userId
-                  },
-                  select: {
-                        id: true,
-                        skuId: true,
-                        quantity: true,
-                        product: {
-                              select: {
-                                    id: true,
-                                    name: true,
-                                    mainImage: true,
-                                    status: true
-                              }
+            if (existingOrderId) {
+                  // 返回已创建的订单信息
+                  const existingOrder = await prisma.order.findUnique({
+                        where: { id: existingOrderId },
+                        select: {
+                              id: true,
+                              orderNo: true,
+                              orderStatus: true,
+                              paymentStatus: true,
+                              paymentAmount: true
                         }
+                  });
+
+                  if (existingOrder) {
+                        return res.sendSuccess(existingOrder, '订单已存在，请勿重复提交');
                   }
+            }
+
+            // 2. 用唯一锁限制同一用户并发下单请求
+            const userOrderLockKey = `order:lock:${userId}`;
+            const acquireLock = await redisClient.set(userOrderLockKey, '1', {
+                  EX: 10, // 10秒过期
+                  NX: true // 只有不存在时才设置
             });
 
-            if (cartItems.length === 0) {
-                  throw new AppError(400, 'fail', '购物车为空');
+            if (!acquireLock) {
+                  throw new AppError(429, 'fail', '操作太频繁，请稍后再试');
             }
 
-            // 快速筛查商品状态 - 确保所有商品都在线
-            const offlineProducts = cartItems.filter(item => item.product.status !== ProductStatus.ONLINE);
-            if (offlineProducts.length > 0) {
-                  throw new AppError(400, 'fail', `商品 ${offlineProducts.map(p => p.product.name).join(', ')} 已下架`);
-            }
-
-            // 3. 获取SKU信息 - 优化查询，只获取关键字段
-            const skuIds = cartItems.map(item => item.skuId);
-            const skus = await prisma.sku.findMany({
-                  where: {
-                        id: { in: skuIds }
-                  },
-                  select: {
-                        id: true,
-                        price: true,
-                        promotion_price: true,
-                        stock: true,
-                        productId: true,
-                        sku_specs: {
+            try {
+                  // 3. 并行查询关键数据
+                  const [address, cartItems] = await Promise.all([
+                        // 查询地址
+                        prisma.userAddress.findFirst({
+                              where: { id: addressId, userId },
                               select: {
-                                    spec: {
+                                    receiverName: true,
+                                    receiverPhone: true,
+                                    province: true,
+                                    city: true,
+                                    detailAddress: true
+                              }
+                        }),
+                        // 查询购物车项
+                        prisma.userCartItem.findMany({
+                              where: {
+                                    id: { in: cartItemIds },
+                                    userId
+                              },
+                              include: {
+                                    product: {
                                           select: {
-                                                name: true
-                                          }
-                                    },
-                                    specValue: {
-                                          select: {
-                                                value: true
+                                                id: true,
+                                                name: true,
+                                                mainImage: true,
+                                                status: true
                                           }
                                     }
                               }
+                        })
+                  ]);
+
+                  // 4. 基础验证
+                  if (!address) {
+                        throw new AppError(404, 'fail', '收货地址不存在');
+                  }
+
+                  if (cartItems.length === 0) {
+                        throw new AppError(400, 'fail', '购物车为空');
+                  }
+
+                  // 检查商品状态
+                  const offlineProducts = cartItems.filter(item =>
+                        item.product.status !== ProductStatus.ONLINE);
+
+                  if (offlineProducts.length > 0) {
+                        throw new AppError(400, 'fail',
+                              `商品 ${offlineProducts.map(p => p.product.name).join(', ')} 已下架`);
+                  }
+
+                  // 5. 获取SKU信息和预检查库存
+                  const skuIds = cartItems.map(item => item.skuId);
+                  const skus = await prisma.sku.findMany({
+                        where: { id: { in: skuIds } },
+                        select: {
+                              id: true,
+                              productId: true,
+                              price: true,
+                              promotion_price: true,
+                              stock: true,
+                              sku_specs: {
+                                    select: {
+                                          spec: { select: { name: true } },
+                                          specValue: { select: { value: true } }
+                                    }
+                              }
                         }
-                  }
-            });
-
-            // 创建SKU映射以提高查找效率
-            const skuMap = new Map(skus.map(sku => [sku.id, sku]));
-
-            // 4. 计算订单金额和准备订单项
-            let totalAmount = 0;
-            const orderItems = [];
-            const inventoryUpdates = [];
-
-            for (const cartItem of cartItems) {
-                  const sku = skuMap.get(cartItem.skuId);
-
-                  if (!sku) {
-                        throw new AppError(400, 'fail', `商品 ${cartItem.product.name} 的SKU不存在`);
-                  }
-
-                  // 库存初步检查（详细检查将在事务中进行）
-                  if ((sku.stock || 0) < cartItem.quantity) {
-                        throw new AppError(400, 'fail', `商品 ${cartItem.product.name} 库存不足`);
-                  }
-
-                  // 计算商品价格
-                  const unitPrice = sku.promotion_price || sku.price;
-                  const itemTotalPrice = unitPrice * cartItem.quantity;
-                  totalAmount += itemTotalPrice;
-
-                  // 获取SKU规格信息
-                  const skuSpecsInfo = sku.sku_specs.map(spec => ({
-                        specName: spec.spec.name,
-                        specValue: spec.specValue.value
-                  }));
-
-                  // 构建订单项
-                  orderItems.push({
-                        skuId: sku.id,
-                        productName: cartItem.product.name,
-                        mainImage: cartItem.product.mainImage || '',
-                        skuSpecs: skuSpecsInfo,
-                        quantity: cartItem.quantity,
-                        unitPrice,
-                        totalPrice: itemTotalPrice
                   });
 
-                  // 记录需要更新的库存
-                  inventoryUpdates.push({
-                        skuId: sku.id,
-                        quantity: cartItem.quantity,
-                        productName: cartItem.product.name
+                  // 创建SKU映射
+                  const skuMap = new Map(skus.map(sku => [sku.id, sku]));
+
+                  // 6. 计算订单金额和准备订单项
+                  let totalAmount = 0;
+                  const orderItems: { skuId: number; productName: string; mainImage: string; skuSpecs: { specName: string; specValue: string; }[]; quantity: number; unitPrice: number; totalPrice: number; }[] = [];
+                  const inventoryUpdates = [];
+                  const insufficientItems = [];
+
+                  for (const cartItem of cartItems) {
+                        const sku = skuMap.get(cartItem.skuId);
+
+                        if (!sku) {
+                              insufficientItems.push({
+                                    name: cartItem.product.name,
+                                    reason: 'SKU不存在'
+                              });
+                              continue;
+                        }
+
+                        // 库存不足检查
+                        if ((sku.stock || 0) < cartItem.quantity) {
+                              insufficientItems.push({
+                                    name: cartItem.product.name,
+                                    available: sku.stock || 0,
+                                    requested: cartItem.quantity,
+                                    reason: '库存不足'
+                              });
+                              continue;
+                        }
+
+                        // 计算商品价格
+                        const unitPrice = sku.promotion_price || sku.price;
+                        const itemTotalPrice = unitPrice * cartItem.quantity;
+                        totalAmount += itemTotalPrice;
+
+                        // 获取SKU规格信息
+                        const skuSpecsInfo = sku.sku_specs.map(spec => ({
+                              specName: spec.spec.name,
+                              specValue: spec.specValue.value
+                        }));
+
+                        // 构建订单项
+                        orderItems.push({
+                              skuId: sku.id,
+                              productName: cartItem.product.name,
+                              mainImage: cartItem.product.mainImage || '',
+                              skuSpecs: skuSpecsInfo,
+                              quantity: cartItem.quantity,
+                              unitPrice,
+                              totalPrice: itemTotalPrice
+                        });
+
+                        // 记录需要更新的库存
+                        inventoryUpdates.push({
+                              skuId: sku.id,
+                              quantity: cartItem.quantity,
+                              productId: sku.productId,
+                              productName: cartItem.product.name
+                        });
+                  }
+
+                  // 如果有库存不足的商品，不创建订单
+                  if (insufficientItems.length > 0) {
+                        throw new AppError(400, 'fail',
+                              `以下商品库存不足: ${JSON.stringify(insufficientItems)}`);
+                  }
+
+                  // 7. 查询可用的满减规则
+                  const now = new Date();
+                  const applicablePromotion = await prisma.promotion.findFirst({
+                        where: {
+                              isActive: true,
+                              startTime: { lte: now },
+                              endTime: { gte: now },
+                              thresholdAmount: { lte: totalAmount }
+                        },
+                        orderBy: { thresholdAmount: 'desc' }
                   });
-            }
 
-            // 新增代码：查找可用的满减规则
-            const now = new Date();
-            const applicablePromotion = await prisma.promotion.findFirst({
-                  where: {
-                        isActive: true,
-                        startTime: { lte: now },
-                        endTime: { gte: now },
-                        thresholdAmount: { lte: totalAmount }
-                  },
-                  orderBy: {
-                        thresholdAmount: 'desc' // 选择满足条件的最高阈值规则
-                  }
-            });
+                  // 8. 计算折扣金额
+                  let discountAmount = 0;
+                  let promotionId = null;
 
-            // 计算折扣金额
-            let discountAmount = 0;
-            let promotionId = null;
+                  if (applicablePromotion) {
+                        promotionId = applicablePromotion.id;
 
-            if (applicablePromotion) {
-                  promotionId = applicablePromotion.id;
-                  if (applicablePromotion.type === 'AMOUNT_OFF') {
-                        // 满减优惠
-                        discountAmount = applicablePromotion.discountAmount;
-                  } else if (applicablePromotion.type === 'PERCENT_OFF') {
-                        // 折扣优惠 - 百分比折扣
-                        discountAmount = Math.floor(totalAmount * (applicablePromotion.discountAmount / 100));
+                        if (applicablePromotion.type === 'AMOUNT_OFF') {
+                              discountAmount = applicablePromotion.discountAmount;
+                        } else if (applicablePromotion.type === 'PERCENT_OFF') {
+                              discountAmount = Math.floor(totalAmount * (applicablePromotion.discountAmount / 100));
+                        }
+
+                        discountAmount = Math.min(discountAmount, totalAmount);
                   }
 
-                  // 确保折扣金额不超过订单总金额
-                  discountAmount = Math.min(discountAmount, totalAmount);
-            }
+                  // 计算实际支付金额
+                  const paymentAmount = totalAmount - discountAmount;
 
-            // 计算实际支付金额
-            const paymentAmount = totalAmount - discountAmount;
+                  // 9. 快速创建订单记录
+                  const orderId = uuidv4();
+                  const orderNo = generateOrderNo();
 
-            // 5. 创建订单 - 分两个阶段处理
-            const orderId = uuidv4();
-            const orderNo = generateOrderNo();
+                  // 使用事务确保订单创建过程的原子性
+                  await prisma.$transaction(async (tx) => {
+                        // 创建订单基本信息
+                        await tx.order.create({
+                              data: {
+                                    id: orderId,
+                                    orderNo,
+                                    userId,
+                                    orderStatus: OrderStatus.PENDING_PAYMENT,
+                                    paymentStatus: PaymentStatus.UNPAID,
+                                    shippingAddress: {
+                                          receiverName: address.receiverName,
+                                          receiverPhone: address.receiverPhone,
+                                          province: address.province,
+                                          city: address.city,
+                                          detailAddress: address.detailAddress
+                                    },
+                                    totalAmount,
+                                    discountAmount,
+                                    promotionId,
+                                    paymentAmount
+                              }
+                        });
 
-            // 第一阶段：快速创建订单记录（仅包含最基本信息）
-            const order = await prisma.order.create({
-                  data: {
+                        // 直接创建订单项（小批量可以直接在事务中处理）
+                        if (orderItems.length <= 5) {
+                              await tx.orderItem.createMany({
+                                    data: orderItems.map(item => ({
+                                          orderId,
+                                          ...item
+                                    }))
+                              });
+                        }
+                  }, { timeout: 10000 });
+
+                  // 为幂等性控制存储订单ID
+                  await redisClient.setEx(idempotencyKey, 3600, orderId); // 1小时有效期
+
+                  // 10. 对大批量订单项采用异步队列处理
+                  if (orderItems.length > 5) {
+                        await orderQueue.add('processOrderItems', {
+                              orderId,
+                              orderItems
+                        }, {
+                              attempts: 3,
+                              backoff: 2000,
+                              removeOnComplete: true
+                        });
+                  }
+
+                  // 11. 库存锁定与购物车清理用队列异步处理
+                  await orderQueue.add('processOrderInventory', {
+                        orderId,
+                        orderNo,
+                        inventoryUpdates,
+                        cartItemIds
+                  }, {
+                        attempts: 3,
+                        backoff: 2000,
+                        removeOnComplete: true
+                  });
+
+                  // 12. 设置订单超时自动取消（10分钟）
+                  const cancelOrderKey = `order:${orderId}:auto_cancel`;
+                  await redisClient.setEx(cancelOrderKey, 600, '1');
+
+                  // 13. 返回订单基本信息
+                  res.sendSuccess({
                         id: orderId,
                         orderNo,
-                        userId,
-                        orderStatus: OrderStatus.PENDING_PAYMENT,
-                        paymentStatus: PaymentStatus.UNPAID,
-                        shippingAddress: {
-                              receiverName: address.receiverName,
-                              receiverPhone: address.receiverPhone,
-                              province: address.province,
-                              city: address.city,
-                              detailAddress: address.detailAddress
-                        },
                         totalAmount,
                         discountAmount,
-                        promotionId,
                         paymentAmount,
-                        // remark: remark || ''
-                  }
-            });
-
-            // 6. 将库存锁定和订单项创建任务添加到队列
-            await orderQueue.add('processOrderInventory', {
-                  orderId,
-                  orderNo,
-                  orderItems,
-                  inventoryUpdates,
-                  cartItemIds
-            }, {
-                  attempts: 3,
-                  backoff: 2000,
-                  removeOnComplete: true
-            });
-
-            // 7. 设置订单超时自动取消（10分钟）
-            const cancelOrderKey = `order:${orderId}:auto_cancel`;
-            await redisClient.setEx(cancelOrderKey, 600, '1');
-
-            // 8. 返回订单基本信息（不等待订单项处理完成）
-            res.sendSuccess({
-                  id: order.id,
-                  orderNo: order.orderNo,
-                  totalAmount: order.totalAmount,
-                  discountAmount: order.discountAmount,
-                  paymentAmount: order.paymentAmount,
-                  orderStatus: order.orderStatus,
-                  paymentStatus: order.paymentStatus,
-                  createdAt: order.createdAt,
-                  promotion: applicablePromotion ? {
-                        id: applicablePromotion.id,
-                        name: applicablePromotion.name,
-                        type: applicablePromotion.type,
-                        discountAmount: applicablePromotion.discountAmount
-                  } : null
-            }, '订单创建成功，正在处理中');
+                        orderStatus: OrderStatus.PENDING_PAYMENT,
+                        paymentStatus: PaymentStatus.UNPAID,
+                        createdAt: new Date(),
+                        timeoutSeconds: 600, // 10分钟支付期限
+                        promotion: applicablePromotion ? {
+                              id: applicablePromotion.id,
+                              name: applicablePromotion.name,
+                              type: applicablePromotion.type,
+                              discountAmount: applicablePromotion.discountAmount
+                        } : null
+                  }, '订单创建成功，请在10分钟内完成支付');
+            } finally {
+                  // 释放用户下单锁
+                  await redisClient.del(userOrderLockKey);
+            }
       }),
 
       // 获取订单列表
@@ -403,8 +469,7 @@ export const orderController = {
             });
       }),
 
-      // 支付订单
-      // 优化后的支付方法 - 插入到order.controller.ts中
+      // 支付订单  - 优化后的支付订单方法 - 插入到order.controller.ts中
       payOrder: asyncHandler(async (req: Request, res: Response) => {
             const userId = req.shopUser?.id;
             const { id } = req.params;
@@ -414,93 +479,164 @@ export const orderController = {
                   throw new AppError(401, 'fail', '请先登录');
             }
 
-            // 查询订单基本信息（不包含详细订单项）
-            const order = await prisma.order.findFirst({
-                  where: {
-                        id,
-                        userId
-                  },
-                  select: {
-                        id: true,
-                        orderNo: true,
-                        orderStatus: true,
-                        paymentStatus: true,
-                        paymentAmount: true,
-                        orderItems: {
-                              select: {
-                                    id: true,
-                                    skuId: true,
-                                    quantity: true
+            // 1. 幂等性控制 - 避免重复支付
+            const paymentIdempotencyKey = `payment:idempotency:${id}:${transactionId}`;
+            const hasProcessed = await redisClient.exists(paymentIdempotencyKey);
+
+            if (hasProcessed) {
+                  // 返回已处理的支付状态
+                  return res.sendSuccess({ orderId: id, status: 'processed' }, '订单已处理，请勿重复支付');
+            }
+
+            // 设置幂等键，5分钟内有效
+            await redisClient.setEx(paymentIdempotencyKey, 300, '1');
+
+            // 2. 并发控制锁，确保同一订单不会并发处理
+            const orderPayLockKey = `order:pay:lock:${id}`;
+            const acquireLock = await redisClient.set(orderPayLockKey, '1', {
+                  EX: 30, // 30秒过期
+                  NX: true // 只有不存在时才设置
+            });
+
+            if (!acquireLock) {
+                  throw new AppError(429, 'fail', '订单正在处理中，请稍后再试');
+            }
+
+            // 3. 启用失败自动重试机制
+            const retryKey = `payment:retry:${id}`;
+            const retryCount = await redisClient.get(retryKey);
+
+            try {
+                  // 4. 查询订单并验证状态
+                  const order = await prisma.order.findFirst({
+                        where: { id, userId },
+                        select: {
+                              id: true,
+                              orderNo: true,
+                              orderStatus: true,
+                              paymentStatus: true,
+                              paymentAmount: true,
+                              orderItems: {
+                                    select: {
+                                          id: true,
+                                          skuId: true,
+                                          quantity: true
+                                    }
                               }
                         }
+                  });
+
+                  if (!order) {
+                        throw new AppError(404, 'fail', '订单不存在');
                   }
-            });
 
-            if (!order) {
-                  throw new AppError(404, 'fail', '订单不存在');
-            }
+                  if (order.orderStatus !== OrderStatus.PENDING_PAYMENT) {
+                        throw new AppError(400, 'fail', '订单状态不正确，无法支付');
+                  }
 
-            if (order.orderStatus !== OrderStatus.PENDING_PAYMENT) {
-                  throw new AppError(400, 'fail', '订单状态不正确，无法支付');
-            }
+                  if (order.paymentStatus === PaymentStatus.PAID) {
+                        // 已支付的订单清理幂等键
+                        await redisClient.del(paymentIdempotencyKey);
+                        return res.sendSuccess({ orderId: order.id }, '订单已支付，请勿重复支付');
+                  }
 
-            if (order.paymentStatus === PaymentStatus.PAID) {
-                  throw new AppError(400, 'fail', '订单已支付，请勿重复支付');
-            }
+                  // 5. 检查订单是否已超时
+                  const cancelOrderKey = `order:${order.id}:auto_cancel`;
+                  const isOrderValid = await redisClient.exists(cancelOrderKey);
 
-            // 检查订单是否已超时
-            const cancelOrderKey = `order:${order.id}:auto_cancel`;
-            const isOrderValid = await redisClient.exists(cancelOrderKey);
+                  if (isOrderValid === 0 && !retryCount) {
+                        throw new AppError(400, 'fail', '订单已超时，请重新下单');
+                  }
 
-            if (isOrderValid === 0) {
-                  throw new AppError(400, 'fail', '订单已超时，请重新下单');
-            }
+                  // 6. 模拟外部支付调用
+                  // 此处应调用实际支付网关，处理实际支付逻辑
+                  // 简化示例，仅作为概念演示
 
-            // 创建支付记录和更新订单状态（核心操作）
-            await prisma.$transaction(async (tx) => {
-                  // 创建支付记录
-                  await tx.paymentLog.create({
-                        data: {
-                              orderId: order.id,
-                              amount: order.paymentAmount,
-                              paymentType,
-                              transactionId,
-                              status: 1 // 支付成功
-                        }
+                  // 7. 更新订单状态和创建支付记录
+                  await prisma.$transaction(async (tx) => {
+                        // 创建支付记录
+                        await tx.paymentLog.create({
+                              data: {
+                                    orderId: order.id,
+                                    amount: order.paymentAmount,
+                                    paymentType,
+                                    transactionId,
+                                    status: 1 // 支付成功
+                              }
+                        });
+
+                        // 更新订单状态
+                        await tx.order.update({
+                              where: { id: order.id },
+                              data: {
+                                    orderStatus: OrderStatus.PENDING_SHIPMENT,
+                                    paymentStatus: PaymentStatus.PAID
+                              }
+                        });
                   });
 
-                  // 更新订单状态
-                  await tx.order.update({
-                        where: { id: order.id },
-                        data: {
-                              orderStatus: OrderStatus.PENDING_SHIPMENT,
-                              paymentStatus: PaymentStatus.PAID
-                        }
+                  // 8. 支付成功后的操作
+                  // 删除订单超时任务
+                  await redisClient.del(cancelOrderKey);
+
+                  // 设置12小时后自动完成订单
+                  const autoCompleteKey = `order:${order.id}:auto_complete`;
+                  await redisClient.setEx(autoCompleteKey, 12 * 60 * 60, '1');
+
+                  // 清理重试计数
+                  await redisClient.del(retryKey);
+
+                  // 9. 将库存实际扣减操作异步处理
+                  await orderQueue.add('processOrderPayment', {
+                        orderId: order.id,
+                        orderNo: order.orderNo,
+                        orderItems: order.orderItems
+                  }, {
+                        attempts: 5, // 提高重试次数
+                        backoff: {
+                              type: 'exponential',
+                              delay: 2000
+                        },
+                        removeOnComplete: true
                   });
-            });
 
-            // 删除订单超时任务
-            await redisClient.del(cancelOrderKey);
+                  // 10. 添加到支付完成事件流
+                  await orderQueue.add('processPaymentEvent', {
+                        orderId: order.id,
+                        orderNo: order.orderNo,
+                        paymentAmount: order.paymentAmount,
+                        paymentType,
+                        transactionId,
+                        timestamp: new Date().toISOString()
+                  }, {
+                        attempts: 3,
+                        removeOnComplete: true
+                  });
 
-            // 设置12小时后自动完成订单
-            const autoCompleteKey = `order:${order.id}:auto_complete`;
-            await redisClient.setEx(autoCompleteKey, 12 * 60 * 60, '1');
+                  // 响应客户端
+                  res.sendSuccess({
+                        orderId: order.id,
+                        orderNo: order.orderNo,
+                        paymentStatus: PaymentStatus.PAID,
+                        orderStatus: OrderStatus.PENDING_SHIPMENT,
+                        transactionId
+                  }, '订单支付成功');
 
-            // 将库存实际扣减操作放入队列（异步处理）
-            await orderQueue.add('processOrderPayment', {
-                  orderId: order.id,
-                  orderNo: order.orderNo,
-                  orderItems: order.orderItems.map(item => ({
-                        ...item,
-                        // 这里可能需要查询productId，或者在订单项中添加productId字段
-                        productId: null // 需要根据实际情况设置
-                  }))
-            }, {
-                  attempts: 3,
-                  backoff: 2000,
-                  removeOnComplete: true
-            });
+            } catch (error) {
+                  // 记录失败并设置重试机制
+                  const currentRetry = retryCount ? parseInt(retryCount) : 0;
 
-            res.sendSuccess({ orderId: order.id }, '订单支付成功');
-      })
+                  if (currentRetry < 3) { // 最多重试3次
+                        await redisClient.setEx(retryKey, 300, (currentRetry + 1).toString());
+                  }
+
+                  // 记录支付失败日志（实际项目应记录到持久化存储）
+                  console.error('支付处理失败:', error);
+
+                  throw error;
+            } finally {
+                  // 释放支付处理锁
+                  await redisClient.del(orderPayLockKey);
+            }
+      }),
 };
