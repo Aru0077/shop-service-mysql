@@ -6,6 +6,7 @@ import favoriteRoutes from './favorite';
 import addressRoutes from './address';
 import cartRoutes from './cart';
 import orderRoutes from './order';
+import promotionRoutes from './promotion';
 
 const router = Router();
 
@@ -26,5 +27,8 @@ router.use('/cart', cartRoutes);
 
 // 订单相关路由
 router.use('/orders', orderRoutes);
+
+// 满减规则路由
+router.use('/promotions', promotionRoutes);
 
 export default router;

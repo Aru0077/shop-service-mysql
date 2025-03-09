@@ -26,6 +26,7 @@ function generateOrderNo(): string {
 
 export const orderController = {
       // 创建订单
+      // 创建订单
       createOrder: asyncHandler(async (req: Request, res: Response) => {
             const userId = req.shopUser?.id;
             const { addressId, cartItemIds, remark } = req.body;
@@ -35,7 +36,7 @@ export const orderController = {
             }
 
             // 1. 快速验证 - 只检查基本条件
-            // 检查收货地址是否存在且属于用户（保留，因为这是必要验证）
+            // 检查收货地址是否存在且属于用户
             const address = await prisma.userAddress.findFirst({
                   where: {
                         id: addressId,
@@ -165,6 +166,41 @@ export const orderController = {
                   });
             }
 
+            // 新增代码：查找可用的满减规则
+            const now = new Date();
+            const applicablePromotion = await prisma.promotion.findFirst({
+                  where: {
+                        isActive: true,
+                        startTime: { lte: now },
+                        endTime: { gte: now },
+                        thresholdAmount: { lte: totalAmount }
+                  },
+                  orderBy: {
+                        thresholdAmount: 'desc' // 选择满足条件的最高阈值规则
+                  }
+            });
+
+            // 计算折扣金额
+            let discountAmount = 0;
+            let promotionId = null;
+
+            if (applicablePromotion) {
+                  promotionId = applicablePromotion.id;
+                  if (applicablePromotion.type === 'AMOUNT_OFF') {
+                        // 满减优惠
+                        discountAmount = applicablePromotion.discountAmount;
+                  } else if (applicablePromotion.type === 'PERCENT_OFF') {
+                        // 折扣优惠 - 百分比折扣
+                        discountAmount = Math.floor(totalAmount * (applicablePromotion.discountAmount / 100));
+                  }
+
+                  // 确保折扣金额不超过订单总金额
+                  discountAmount = Math.min(discountAmount, totalAmount);
+            }
+
+            // 计算实际支付金额
+            const paymentAmount = totalAmount - discountAmount;
+
             // 5. 创建订单 - 分两个阶段处理
             const orderId = uuidv4();
             const orderNo = generateOrderNo();
@@ -185,7 +221,10 @@ export const orderController = {
                               detailAddress: address.detailAddress
                         },
                         totalAmount,
-                        paymentAmount: totalAmount
+                        discountAmount,
+                        promotionId,
+                        paymentAmount,
+                        // remark: remark || ''
                   }
             });
 
@@ -211,9 +250,17 @@ export const orderController = {
                   id: order.id,
                   orderNo: order.orderNo,
                   totalAmount: order.totalAmount,
+                  discountAmount: order.discountAmount,
+                  paymentAmount: order.paymentAmount,
                   orderStatus: order.orderStatus,
                   paymentStatus: order.paymentStatus,
-                  createdAt: order.createdAt
+                  createdAt: order.createdAt,
+                  promotion: applicablePromotion ? {
+                        id: applicablePromotion.id,
+                        name: applicablePromotion.name,
+                        type: applicablePromotion.type,
+                        discountAmount: applicablePromotion.discountAmount
+                  } : null
             }, '订单创建成功，正在处理中');
       }),
 

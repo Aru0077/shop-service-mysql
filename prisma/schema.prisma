@@ -129,6 +129,24 @@ model SkuSpec {
   @@map("sku_specs")
 }
 
+model Promotion {
+  id              Int      @id @default(autoincrement())
+  name            String   @db.VarChar(100)
+  description     String?  @db.Text
+  type            String   @db.VarChar(20) // AMOUNT_OFF 满减, PERCENT_OFF 折扣
+  thresholdAmount Int      // 满足条件的金额阈值
+  discountAmount  Int      // 优惠金额
+  startTime       DateTime
+  endTime         DateTime
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @default(now()) @updatedAt @map("updated_at")
+  
+  appliedOrders   Order[]  // 关联的订单
+
+  @@map("promotions")
+}
+
 model Order {
   id              String       @id @default(uuid()) @db.VarChar(36)
   orderNo         String       @unique(map: "order_no") @map("order_no") @db.VarChar(32)
@@ -143,10 +161,14 @@ model Order {
   orderItems      OrderItem[]
   user            User         @relation(fields: [userId], references: [id], onUpdate: Restrict, map: "orders_ibfk_1")
   paymentLogs     PaymentLog[]
+  promotionId     Int?     @map("promotion_id")
+  discountAmount  Int      @default(0) @map("discount_amount") // 优惠金额
+  promotion       Promotion? @relation(fields: [promotionId], references: [id])
 
   @@index([userId, orderStatus], map: "idx_user_status")
   @@index([orderStatus, createdAt], map: "idx_status_created")
   @@index([createdAt], map: "idx_created")
+  @@index([promotionId], map: "idx_promotion")
   @@map("orders")
 }
 

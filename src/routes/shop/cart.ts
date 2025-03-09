@@ -7,6 +7,7 @@ import {
       updateCartItemSchema,
       deleteCartItemSchema,
       getCartListSchema,
+      previewOrderSchema
 } from '../../validators/shop/cart.validator';
 import { shopAuthMiddleware } from '../../middlewares/shopAuth.middleware';
 
@@ -47,6 +48,13 @@ router.get(
 router.delete(
       '/clear',
       cartController.clearCart
+);
+
+// 预览订单金额（包含满减优惠）
+router.post(
+      '/preview',
+      validateRequest(previewOrderSchema),
+      cartController.previewOrderAmount
 );
 
 

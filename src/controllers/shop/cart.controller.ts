@@ -239,5 +239,120 @@ export const cartController = {
             res.sendSuccess(null, '购物车已清空');
       }),
 
+      // 预览订单金额（包含满减优惠）
+      previewOrderAmount: asyncHandler(async (req: Request, res: Response) => {
+            const userId = req.shopUser?.id;
+            const { cartItemIds } = req.body;
+
+            if (!userId) {
+                  throw new AppError(401, 'fail', '请先登录');
+            }
+
+            // 验证并获取购物车项
+            const cartItems = await prisma.userCartItem.findMany({
+                  where: {
+                        id: { in: cartItemIds },
+                        userId
+                  },
+                  include: {
+                        product: {
+                              select: {
+                                    id: true,
+                                    name: true,
+                                    status: true
+                              }
+                        }
+                  }
+            });
+
+            if (cartItems.length === 0) {
+                  throw new AppError(400, 'fail', '请选择要购买的商品');
+            }
+
+            // 获取SKU信息
+            const skuIds = cartItems.map(item => item.skuId);
+            const skus = await prisma.sku.findMany({
+                  where: {
+                        id: { in: skuIds }
+                  },
+                  select: {
+                        id: true,
+                        price: true,
+                        promotion_price: true,
+                        stock: true
+                  }
+            });
+
+            // 映射SKU
+            const skuMap = new Map(skus.map(sku => [sku.id, sku]));
+
+            // 计算总金额
+            let totalAmount = 0;
+
+            for (const cartItem of cartItems) {
+                  const sku = skuMap.get(cartItem.skuId);
+                  if (!sku) continue;
+
+                  // 使用促销价或原价
+                  const unitPrice = sku.promotion_price || sku.price;
+                  totalAmount += unitPrice * cartItem.quantity;
+            }
+
+            // 查找可用的满减规则
+            const now = new Date();
+            const applicablePromotion = await prisma.promotion.findFirst({
+                  where: {
+                        isActive: true,
+                        startTime: { lte: now },
+                        endTime: { gte: now },
+                        thresholdAmount: { lte: totalAmount }
+                  },
+                  orderBy: {
+                        thresholdAmount: 'desc' // 选择满足条件的最高阈值规则
+                  }
+            });
+
+            // 计算折扣金额
+            let discountAmount = 0;
+            let promotionInfo = null;
+
+            if (applicablePromotion) {
+                  promotionInfo = {
+                        id: applicablePromotion.id,
+                        name: applicablePromotion.name,
+                        type: applicablePromotion.type,
+                        thresholdAmount: applicablePromotion.thresholdAmount,
+                        discountAmount: applicablePromotion.discountAmount
+                  };
+
+                  if (applicablePromotion.type === 'AMOUNT_OFF') {
+                        // 满减优惠
+                        discountAmount = applicablePromotion.discountAmount;
+                  } else if (applicablePromotion.type === 'PERCENT_OFF') {
+                        // 折扣优惠
+                        discountAmount = Math.floor(totalAmount * (applicablePromotion.discountAmount / 100));
+                  }
+
+                  // 确保折扣金额不超过订单总金额
+                  discountAmount = Math.min(discountAmount, totalAmount);
+            }
+
+            // 计算最终支付金额
+            const paymentAmount = totalAmount - discountAmount;
+
+            res.sendSuccess({
+                  totalAmount,
+                  discountAmount,
+                  paymentAmount,
+                  promotion: promotionInfo,
+                  cartItems: cartItems.map(item => ({
+                        id: item.id,
+                        quantity: item.quantity,
+                        skuId: item.skuId,
+                        productId: item.productId,
+                        unitPrice: skuMap.get(item.skuId)?.promotion_price || skuMap.get(item.skuId)?.price || 0
+                  }))
+            });
+      })
 
 };

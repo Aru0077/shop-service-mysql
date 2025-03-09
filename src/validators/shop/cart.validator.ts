@@ -35,3 +35,11 @@ export const getCartListSchema = z.object({
       })
 });
 
+// 预览订单金额验证
+export const previewOrderSchema = z.object({
+      body: z.object({
+            cartItemIds: z.array(z.number().int().positive('购物车项ID必须为正整数'))
+                  .min(1, '至少需要选择一个商品')
+      })
+});
+

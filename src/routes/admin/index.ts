@@ -10,6 +10,7 @@ import skuRoutes from './sku.route'
 import userRoutes from './user.routes'
 import orderRoutes from './order.routes'
 import statisticsRoutes from './statistics.routes'
+import promotionRoutes from './promotion.routes' // 新增
 
 const router = Router();
 
@@ -42,6 +43,9 @@ router.use('/orders', orderRoutes)
 
 // 数据统计路由
 router.use('/statistics', statisticsRoutes)
+
+// 添加满减规则路由
+router.use('/promotions', promotionRoutes)
 
 
 
