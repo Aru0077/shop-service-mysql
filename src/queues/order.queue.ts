@@ -3,6 +3,7 @@ import Queue from 'bull';
 import { prisma } from '../config';
 import { StockChangeType } from '../constants/stock.constants';
 import { OrderStatus } from '../constants/orderStatus.enum';
+import { inventoryService } from '../services/inventory.service';
 
 // 创建订单处理队列
 export const orderQueue = new Queue('order-processing', {
@@ -25,7 +26,15 @@ interface OrderItemPayload {
 }
 
 
-// 处理订单库存和订单项创建 
+// 创建适当的接口定义
+interface InventoryUpdate {
+      skuId: number;
+      quantity: number;
+      productId?: number;
+      productName?: string;
+}
+
+// 处理订单库存和订单项创建  
 orderQueue.process('processOrderInventory', async (job) => {
       const { orderId, orderNo, orderItems, inventoryUpdates, cartItemIds } = job.data;
 
@@ -40,56 +49,53 @@ orderQueue.process('processOrderInventory', async (job) => {
                   });
             }, { timeout: 10000 });
 
-            // 2. 分批处理库存锁定 - 较小批次事务
-            const BATCH_SIZE = 5; // 每批处理5个商品
-            for (let i = 0; i < inventoryUpdates.length; i += BATCH_SIZE) {
-                  const batch = inventoryUpdates.slice(i, i + BATCH_SIZE);
+            // 2. 使用库存服务预占库存
+            const preOccupyResults = await Promise.all(
+                  inventoryUpdates.map(async (update: InventoryUpdate) => {
+                        // 使用库存服务预占库存
+                        const success = await inventoryService.preOccupyInventory(
+                              update.skuId,
+                              update.quantity,
+                              orderNo,
+                              600 // 10分钟超时
+                        );
 
-                  await prisma.$transaction(async (tx) => {
-                        for (const update of batch) {
-                              // 检查库存
-                              const sku = await tx.sku.findUnique({
-                                    where: { id: update.skuId },
-                                    select: { id: true, stock: true }
-                              });
+                        return {
+                              skuId: update.skuId,
+                              success,
+                              quantity: update.quantity
+                        };
+                  })
+            );
 
-                              if (!sku || (sku.stock || 0) < update.quantity) {
-                                    continue; // 库存不足，跳过
-                              }
+            // 检查是否所有库存预占都成功
+            const failedItems = preOccupyResults.filter(item => !item.success);
+            if (failedItems.length > 0) {
+                  // 对失败的预占进行释放处理
+                  await Promise.all(
+                        preOccupyResults
+                              .filter(item => item.success)
+                              .map(item => inventoryService.releasePreOccupied(
+                                    item.skuId,
+                                    item.quantity,
+                                    orderNo
+                              ))
+                  );
 
-                              // 锁定库存
-                              await tx.sku.update({
-                                    where: { id: update.skuId },
-                                    data: { lockedStock: { increment: update.quantity } }
-                              });
-
-                              // 记录库存变更
-                              await tx.stockLog.create({
-                                    data: {
-                                          skuId: update.skuId,
-                                          changeQuantity: -update.quantity,
-                                          currentStock: sku.stock || 0,
-                                          type: StockChangeType.ORDER_LOCK,
-                                          orderNo,
-                                          remark: `创建订单锁定库存 ${orderNo}`,
-                                          operator: 'system'
-                                    }
-                              });
-                        }
-                  }, { timeout: 10000 });
+                  throw new Error(`库存锁定失败: ${failedItems.map(item => item.skuId).join(',')}`);
             }
 
-            // 3. 删除购物车项 - 单独事务
+            // 3. 删除购物车项
             if (cartItemIds.length > 0) {
                   await prisma.userCartItem.deleteMany({
                         where: { id: { in: cartItemIds } }
                   });
             }
 
-            // 4. 更新订单状态 - 单独事务
+            // 4. 更新订单状态
             await prisma.order.update({
                   where: { id: orderId },
-                  data: {} // 可添加处理完成标记
+                  data: {}
             });
 
             return { success: true, orderId, orderNo };
@@ -97,78 +103,55 @@ orderQueue.process('processOrderInventory', async (job) => {
             throw error;
       }
 });
-// 处理订单支付后的库存扣减 
+
+
+// 处理订单支付后的库存扣减  
 orderQueue.process('processOrderPayment', async (job) => {
       const { orderId, orderNo, orderItems } = job.data;
 
       try {
-            // 1. 预先加载所有SKU信息
-            const skuIds = orderItems.map((item: OrderItemPayload) => item.skuId);
-            const skus = await prisma.sku.findMany({
-                  where: { id: { in: skuIds } },
-                  select: { id: true, stock: true, lockedStock: true }
-            });
-            const skuMap = new Map(skus.map(sku => [sku.id, sku]));
+            // 1. 确认扣减预占库存
+            const confirmResults = await Promise.all(
+                  orderItems.map(async (item: OrderItemPayload) => {
+                        // 使用库存服务确认扣减
+                        const success = await inventoryService.confirmPreOccupied(
+                              item.skuId,
+                              item.quantity,
+                              orderNo
+                        );
 
-            // 2. 预先加载所有产品ID - 类型保护
-            const productIds = orderItems
-                  .map((item: OrderItemPayload) => item.productId)
-                  .filter((id:any): id is number => id !== null && id !== undefined);
+                        return {
+                              skuId: item.skuId,
+                              success,
+                              productId: item.productId,
+                              quantity: item.quantity
+                        };
+                  })
+            );
 
-            // 3. 批量处理库存和销量更新
-            const BATCH_SIZE = 5;
-            for (let i = 0; i < orderItems.length; i += BATCH_SIZE) {
-                  const batch = orderItems.slice(i, i + BATCH_SIZE);
-
-                  await prisma.$transaction(async (tx) => {
-                        for (const item of batch as OrderItemPayload[]) {
-                              const sku = skuMap.get(item.skuId);
-                              if (!sku) continue;
-
-                              // 更新SKU库存
-                              await tx.sku.update({
-                                    where: { id: item.skuId },
-                                    data: {
-                                          lockedStock: { decrement: item.quantity },
-                                          stock: { decrement: item.quantity }
-                                    }
-                              });
-
-                              // 记录库存日志
-                              await tx.stockLog.create({
-                                    data: {
-                                          skuId: item.skuId,
-                                          changeQuantity: -item.quantity,
-                                          currentStock: (sku.stock || 0) - item.quantity,
-                                          type: StockChangeType.STOCK_OUT,
-                                          orderNo,
-                                          remark: `订单支付扣减库存 ${orderNo}`,
-                                          operator: 'system'
-                                    }
-                              });
-                        }
-                  }, { timeout: 10000 });
+            // 处理可能的失败情况 (实际生产环境应有补偿措施)
+            const failedItems = confirmResults.filter(item => !item.success);
+            if (failedItems.length > 0) {
+                  console.error(`订单${orderNo}部分商品库存扣减失败`, failedItems);
+                  // 在实际系统中这里应该有预警和人工介入机制
             }
 
-            // 4. 批量更新商品销量（单独事务）
-            if (productIds.length > 0) {
-                  // 按产品ID分组数量 - 使用明确的类型
-                  const productQuantities: Record<number, number> = {};
-                  for (const item of orderItems as OrderItemPayload[]) {
-                        if (!item.productId) continue;
-                        productQuantities[item.productId] = (productQuantities[item.productId] || 0) + item.quantity;
-                  }
+            // 2. 按产品ID分组数量，更新销量
+            const productQuantities: Record<number, number> = {};
+            for (const result of confirmResults) {
+                  if (!result.productId || !result.success) continue;
+                  productQuantities[result.productId] = (productQuantities[result.productId] || 0) + result.quantity;
+            }
 
-                  // 逐个更新产品销量
-                  for (const productIdStr of Object.keys(productQuantities)) {
-                        const productId = Number(productIdStr); // 将字符串键转换回数字
-                        const quantity = productQuantities[productId];
+            // 3. 逐个更新产品销量
+            for (const productIdStr of Object.keys(productQuantities)) {
+                  const productId = Number(productIdStr);
+                  const quantity = productQuantities[productId];
 
-                        await prisma.product.update({
-                              where: { id: productId },
-                              data: { salesCount: { increment: quantity } }
-                        });
-                  }
+                  await prisma.product.update({
+                        where: { id: productId },
+                        data: { salesCount: { increment: quantity } }
+                  });
             }
 
             return { success: true, orderId, orderNo };
@@ -176,7 +159,81 @@ orderQueue.process('processOrderPayment', async (job) => {
             throw error;
       }
 });
+ 
+// 修改处理订单库存和订单项的方法
+orderQueue.process('processOrderItems', async (job) => {
+      const { orderId, orderItems, orderNo, inventoryUpdates, cartItemIds } = job.data;
 
+      try {
+            // 1. 如果订单项还未创建（大批量情况）
+            if (orderItems.length > 5) {
+                  await prisma.$transaction(async (tx) => {
+                        await tx.orderItem.createMany({
+                              data: orderItems.map((item: any) => ({
+                                    orderId,
+                                    ...item
+                              }))
+                        });
+                  }, { timeout: 10000 });
+            }
+
+            // 2. 使用库存服务预占库存
+            const preOccupyResults = await Promise.all(
+                  inventoryUpdates.map(async (update: { skuId: number; quantity: number; }) => {
+                        const success = await inventoryService.preOccupyInventory(
+                              update.skuId,
+                              update.quantity,
+                              orderNo,
+                              600 // 10分钟超时
+                        );
+
+                        return {
+                              skuId: update.skuId,
+                              success,
+                              quantity: update.quantity
+                        };
+                  })
+            );
+
+            // 检查是否所有库存预占都成功
+            const failedItems = preOccupyResults.filter(item => !item.success);
+            if (failedItems.length > 0) {
+                  // 记录失败情况
+                  console.error(`订单 ${orderNo} 库存锁定失败: ${failedItems.map(item => item.skuId).join(',')}`);
+
+                  // 释放已成功预占的库存
+                  await Promise.all(
+                        preOccupyResults
+                              .filter(item => item.success)
+                              .map(item => inventoryService.releasePreOccupied(
+                                    item.skuId,
+                                    item.quantity,
+                                    orderNo
+                              ))
+                  );
+
+                  // 标记订单为取消状态
+                  await prisma.order.update({
+                        where: { id: orderId },
+                        data: { orderStatus: OrderStatus.CANCELLED }
+                  });
+
+                  throw new Error(`订单 ${orderNo} 库存锁定失败`);
+            }
+
+            // 3. 删除购物车项
+            if (cartItemIds.length > 0) {
+                  await prisma.userCartItem.deleteMany({
+                        where: { id: { in: cartItemIds } }
+                  });
+            }
+
+            return { success: true, orderId, orderNo };
+      } catch (error) {
+            // 这里的错误已经在上面进行了处理
+            throw error;
+      }
+});
 // 监听队列错误
 orderQueue.on('error', (error) => {
       // logger.error('订单队列错误:', error);

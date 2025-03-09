@@ -8,6 +8,7 @@ import { OrderStatus, PaymentStatus } from '../../constants/orderStatus.enum';
 import { StockChangeType } from '../../constants/stock.constants';
 import { ProductStatus } from '@prisma/client';
 import { orderQueue } from '../../queues/order.queue';
+import { inventoryService } from '../../services/inventory.service';
 
 // 生成订单号
 function generateOrderNo(): string {
@@ -66,6 +67,10 @@ export const orderController = {
             if (!acquireLock) {
                   throw new AppError(429, 'fail', '操作太频繁，请稍后再试');
             }
+
+            const orderNo = generateOrderNo();
+            const orderId = uuidv4();
+            let inventoryUpdates = [];
 
             try {
                   // 3. 并行查询关键数据
@@ -143,7 +148,6 @@ export const orderController = {
                   // 6. 计算订单金额和准备订单项
                   let totalAmount = 0;
                   const orderItems: { skuId: number; productName: string; mainImage: string; skuSpecs: { specName: string; specValue: string; }[]; quantity: number; unitPrice: number; totalPrice: number; }[] = [];
-                  const inventoryUpdates = [];
                   const insufficientItems = [];
 
                   for (const cartItem of cartItems) {
@@ -236,11 +240,7 @@ export const orderController = {
                   // 计算实际支付金额
                   const paymentAmount = totalAmount - discountAmount;
 
-                  // 9. 快速创建订单记录
-                  const orderId = uuidv4();
-                  const orderNo = generateOrderNo();
-
-                  // 使用事务确保订单创建过程的原子性
+                  // 9. 创建订单记录
                   await prisma.$transaction(async (tx) => {
                         // 创建订单基本信息
                         await tx.order.create({
@@ -278,21 +278,10 @@ export const orderController = {
                   // 为幂等性控制存储订单ID
                   await redisClient.setEx(idempotencyKey, 3600, orderId); // 1小时有效期
 
-                  // 10. 对大批量订单项采用异步队列处理
-                  if (orderItems.length > 5) {
-                        await orderQueue.add('processOrderItems', {
-                              orderId,
-                              orderItems
-                        }, {
-                              attempts: 3,
-                              backoff: 2000,
-                              removeOnComplete: true
-                        });
-                  }
-
-                  // 11. 库存锁定与购物车清理用队列异步处理
-                  await orderQueue.add('processOrderInventory', {
+                  // 10. 处理库存预占和订单项创建
+                  await orderQueue.add('processOrderItems', {
                         orderId,
+                        orderItems,
                         orderNo,
                         inventoryUpdates,
                         cartItemIds
@@ -302,11 +291,11 @@ export const orderController = {
                         removeOnComplete: true
                   });
 
-                  // 12. 设置订单超时自动取消（10分钟）
+                  // 11. 设置订单超时自动取消（10分钟）
                   const cancelOrderKey = `order:${orderId}:auto_cancel`;
                   await redisClient.setEx(cancelOrderKey, 600, '1');
 
-                  // 13. 返回订单基本信息
+                  // 12. 返回订单基本信息
                   res.sendSuccess({
                         id: orderId,
                         orderNo,
@@ -324,6 +313,26 @@ export const orderController = {
                               discountAmount: applicablePromotion.discountAmount
                         } : null
                   }, '订单创建成功，请在10分钟内完成支付');
+            } catch (error) {
+                  // 发生错误时释放已预占的库存
+                  if (inventoryUpdates.length > 0) {
+                        for (const update of inventoryUpdates) {
+                              try {
+                                    await inventoryService.releasePreOccupied(
+                                          update.skuId,
+                                          update.quantity,
+                                          orderNo
+                                    );
+                              } catch (releaseError) {
+                                    console.error(`释放库存失败 (${update.skuId}):`, releaseError);
+                              }
+                        }
+                  }
+
+                  if (error instanceof AppError) {
+                        throw error;
+                  }
+                  throw new AppError(500, 'fail', '创建订单失败，请稍后重试');
             } finally {
                   // 释放用户下单锁
                   await redisClient.del(userOrderLockKey);
