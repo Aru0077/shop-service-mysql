@@ -72,7 +72,7 @@ model Product {
   @@index([is_promotion, status], map: "idx_promotion_status")
   @@index([categoryId, status], map: "idx_category_status")
   @@index([name, productCode], map: "idx_name_code") 
-  @@index([name(ops: raw("gin_trgm_ops"))], map: "idx_product_name_search", type: Raw("gin")) 
+  @@index([name], map: "idx_product_name_search")
   @@index([status, salesCount(sort: Desc)], map: "idx_status_sales") 
   @@index([status, is_promotion], map: "idx_status_promotion")
 
