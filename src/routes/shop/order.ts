@@ -6,7 +6,8 @@ import {
       createOrderSchema,
       getOrderListSchema,
       getOrderDetailSchema,
-      payOrderSchema
+      payOrderSchema,
+      quickBuySchema
 } from '../../validators/shop/order.validator';
 import { shopAuthMiddleware } from '../../middlewares/shopAuth.middleware';
 
@@ -20,6 +21,12 @@ router.post(
       '/',
       validateRequest(createOrderSchema),
       orderController.createOrder
+);
+
+router.post(
+      '/quick-buy',
+      validateRequest(quickBuySchema),
+      orderController.quickBuy
 );
 
 // 获取订单列表

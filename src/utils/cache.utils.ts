@@ -1,6 +1,16 @@
 // src/utils/cache.utils.ts
 import { redisClient } from '../config';
 
+// 添加分级缓存策略
+const CACHE_LEVELS = {
+    MICRO: 10,        // 10秒 - 超短时缓存，用于高频API
+    SHORT: 60,        // 1分钟
+    MEDIUM: 300,      // 5分钟
+    LONG: 1800,       // 30分钟
+    VERY_LONG: 3600   // 1小时
+};
+
+
 // src/utils/cache.utils.ts 扩展功能
 export const cacheUtils = {
     async getOrSet(key: string, callback: () => Promise<any>, expireTime: number = 300) {
@@ -37,5 +47,27 @@ export const cacheUtils = {
             await redisClient.expire(key, period);
         }
         return current <= limit;
-    }
+    },
+
+    // 添加分级缓存方法
+    async cachedByLevel(key: string, callback: () => Promise<any>, level: keyof typeof CACHE_LEVELS = 'MEDIUM') {
+        const expireTime = CACHE_LEVELS[level];
+        return this.getOrSet(key, callback, expireTime);
+    },
+
+    // 添加缓存预热方法
+    async warmupCache(keys: string[], callbacks: (() => Promise<any>)[]) {
+        const tasks = keys.map((key, index) => {
+            const callback = callbacks[index];
+            return this.getOrSet(key, callback);
+        });
+
+        return Promise.all(tasks);
+    },
+
+    // 添加批量失效方法
+    async invalidateMany(patterns: string[]) {
+        const tasks = patterns.map(pattern => this.invalidateCache(pattern));
+        return Promise.all(tasks);
+    },
 };

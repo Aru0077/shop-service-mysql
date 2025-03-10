@@ -39,7 +39,14 @@ export const getCartListSchema = z.object({
 export const previewOrderSchema = z.object({
       body: z.object({
             cartItemIds: z.array(z.number().int().positive('购物车项ID必须为正整数'))
-                  .min(1, '至少需要选择一个商品')
+                  .optional(),
+            productInfo: z.object({
+                  productId: z.number().int().positive('商品ID必须为正整数'),
+                  skuId: z.number().int().positive('SKU ID必须为正整数'),
+                  quantity: z.number().int().positive('数量必须为正整数')
+            }).optional()
+      }).refine(data => data.cartItemIds || data.productInfo, {
+            message: '必须提供购物车项ID或商品信息'
       })
 });
 

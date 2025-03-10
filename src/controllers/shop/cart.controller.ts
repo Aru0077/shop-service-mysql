@@ -284,62 +284,116 @@ export const cartController = {
       }),
 
       // 预览订单金额（包含满减优惠）
+      // src/controllers/shop/cart.controller.ts 中优化预览订单API
       previewOrderAmount: asyncHandler(async (req: Request, res: Response) => {
             const userId = req.shopUser?.id;
-            const { cartItemIds } = req.body;
+            const { cartItemIds, productInfo } = req.body;
 
             if (!userId) {
                   throw new AppError(401, 'fail', '请先登录');
             }
 
-            // 验证并获取购物车项
-            const cartItems = await prisma.userCartItem.findMany({
-                  where: {
-                        id: { in: cartItemIds },
-                        userId
-                  },
-                  include: {
-                        product: {
-                              select: {
-                                    id: true,
-                                    name: true,
-                                    status: true
+            let totalAmount = 0;
+            let items = [];
+
+            // 处理购物车模式
+            if (cartItemIds && cartItemIds.length > 0) {
+                  // 验证并获取购物车项
+                  const cartItems = await prisma.userCartItem.findMany({
+                        where: {
+                              id: { in: cartItemIds },
+                              userId
+                        },
+                        include: {
+                              product: {
+                                    select: {
+                                          id: true,
+                                          name: true,
+                                          status: true
+                                    }
                               }
                         }
-                  }
-            });
+                  });
 
-            if (cartItems.length === 0) {
-                  throw new AppError(400, 'fail', '请选择要购买的商品');
+                  if (cartItems.length === 0) {
+                        throw new AppError(400, 'fail', '请选择要购买的商品');
+                  }
+
+                  // 获取SKU信息
+                  const skuIds = cartItems.map(item => item.skuId);
+                  const skus = await prisma.sku.findMany({
+                        where: {
+                              id: { in: skuIds }
+                        },
+                        select: {
+                              id: true,
+                              price: true,
+                              promotion_price: true,
+                              stock: true
+                        }
+                  });
+
+                  // 映射SKU
+                  const skuMap = new Map(skus.map(sku => [sku.id, sku]));
+
+                  // 计算总金额
+                  for (const cartItem of cartItems) {
+                        const sku = skuMap.get(cartItem.skuId);
+                        if (!sku) continue;
+
+                        // 使用促销价或原价
+                        const unitPrice = sku.promotion_price || sku.price;
+                        totalAmount += unitPrice * cartItem.quantity;
+
+                        items.push({
+                              id: cartItem.id,
+                              quantity: cartItem.quantity,
+                              skuId: cartItem.skuId,
+                              productId: cartItem.productId,
+                              unitPrice: sku.promotion_price || sku.price || 0
+                        });
+                  }
             }
+            // 处理直接购买模式
+            else if (productInfo) {
+                  const { productId, skuId, quantity } = productInfo;
 
-            // 获取SKU信息
-            const skuIds = cartItems.map(item => item.skuId);
-            const skus = await prisma.sku.findMany({
-                  where: {
-                        id: { in: skuIds }
-                  },
-                  select: {
-                        id: true,
-                        price: true,
-                        promotion_price: true,
-                        stock: true
+                  // 验证商品和SKU
+                  const [product, sku] = await Promise.all([
+                        prisma.product.findFirst({
+                              where: {
+                                    id: productId,
+                                    status: ProductStatus.ONLINE
+                              }
+                        }),
+                        prisma.sku.findFirst({
+                              where: {
+                                    id: skuId,
+                                    productId
+                              }
+                        })
+                  ]);
+
+                  if (!product) {
+                        throw new AppError(404, 'fail', '商品不存在或已下架');
                   }
-            });
 
-            // 映射SKU
-            const skuMap = new Map(skus.map(sku => [sku.id, sku]));
+                  if (!sku) {
+                        throw new AppError(404, 'fail', 'SKU不存在');
+                  }
 
-            // 计算总金额
-            let totalAmount = 0;
-
-            for (const cartItem of cartItems) {
-                  const sku = skuMap.get(cartItem.skuId);
-                  if (!sku) continue;
-
-                  // 使用促销价或原价
+                  // 计算金额
                   const unitPrice = sku.promotion_price || sku.price;
-                  totalAmount += unitPrice * cartItem.quantity;
+                  totalAmount = unitPrice * quantity;
+
+                  items.push({
+                        quantity,
+                        skuId,
+                        productId,
+                        unitPrice
+                  });
+            } else {
+                  throw new AppError(400, 'fail', '参数错误');
             }
 
             // 查找可用的满减规则
@@ -389,14 +443,8 @@ export const cartController = {
                   discountAmount,
                   paymentAmount,
                   promotion: promotionInfo,
-                  cartItems: cartItems.map(item => ({
-                        id: item.id,
-                        quantity: item.quantity,
-                        skuId: item.skuId,
-                        productId: item.productId,
-                        unitPrice: skuMap.get(item.skuId)?.promotion_price || skuMap.get(item.skuId)?.price || 0
-                  }))
+                  items
             });
-      })
+      }),
 
 };

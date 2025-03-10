@@ -3,7 +3,7 @@ import { Request, Response } from 'express';
 import { prisma, redisClient } from '../../config';
 import { asyncHandler } from '../../utils/http.utils';
 import { AppError } from '../../utils/http.utils';
-import { ProductStatus } from '@prisma/client';
+import { ProductStatus, } from '@prisma/client';
 import { cacheUtils } from '../../utils/cache.utils';
 
 export const productController = {
@@ -94,7 +94,7 @@ export const productController = {
             res.sendSuccess(latestProductsData);
       }),
 
-      // 获取销量最高商品
+      // 获取销量最高商品 
       getTopSellingProducts: asyncHandler(async (req: Request, res: Response) => {
             const { page = '1', limit = '10' } = req.query;
             const pageNumber = Number(page);
@@ -104,47 +104,48 @@ export const productController = {
             const cacheKey = `shop:products:top-selling:${page}:${limit}`;
 
             const topSellingProductsData = await cacheUtils.getOrSet(cacheKey, async () => {
-                  const [total, products] = await Promise.all([
-                        prisma.product.count({
-                              where: {
-                                    status: ProductStatus.ONLINE,
-                                    salesCount: {
-                                          gt: 0
+                  // 使用标准 Prisma 查询获取总数
+                  const total = await prisma.product.count({
+                        where: {
+                              status: ProductStatus.ONLINE,
+                              salesCount: {
+                                    gt: 0
+                              }
+                        }
+                  });
+
+                  // 获取产品数据
+                  const products = await prisma.product.findMany({
+                        where: {
+                              status: ProductStatus.ONLINE,
+                              salesCount: {
+                                    gt: 0
+                              }
+                        },
+                        include: {
+                              category: {
+                                    select: {
+                                          id: true,
+                                          name: true
+                                    }
+                              },
+                              skus: {
+                                    take: 1,
+                                    orderBy: {
+                                          price: 'asc'
+                                    },
+                                    select: {
+                                          price: true,
+                                          promotion_price: true
                                     }
                               }
-                        }),
-                        prisma.product.findMany({
-                              where: {
-                                    status: ProductStatus.ONLINE,
-                                    salesCount: {
-                                          gt: 0
-                                    }
-                              },
-                              include: {
-                                    category: {
-                                          select: {
-                                                id: true,
-                                                name: true
-                                          }
-                                    },
-                                    skus: {
-                                          take: 1,
-                                          orderBy: {
-                                                price: 'asc'
-                                          },
-                                          select: {
-                                                price: true,
-                                                promotion_price: true
-                                          }
-                                    }
-                              },
-                              orderBy: {
-                                    salesCount: 'desc'
-                              },
-                              skip,
-                              take: limitNumber
-                        })
-                  ]);
+                        },
+                        orderBy: {
+                              salesCount: 'desc'
+                        },
+                        skip,
+                        take: limitNumber
+                  });
 
                   return {
                         total,
