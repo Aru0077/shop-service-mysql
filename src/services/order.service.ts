@@ -312,7 +312,7 @@ class OrderService {
                                     totalAmount: orderData.totalAmount,
                                     discountAmount: orderData.discountAmount,
                                     promotionId: orderData.promotionId,
-                                    paymentAmount: orderData.paymentAmount, 
+                                    paymentAmount: orderData.paymentAmount,
                               }
                         });
 
@@ -801,7 +801,7 @@ class OrderService {
                                     totalAmount,
                                     discountAmount,
                                     promotionId: promotion?.id || null,
-                                    paymentAmount, 
+                                    paymentAmount,
                               }
                         });
 

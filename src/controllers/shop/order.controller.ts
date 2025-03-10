@@ -62,11 +62,10 @@ export const orderController = {
                   const skuMap = await orderService.getSKUInfo(cartItems);
                   orderService.validateStock(cartItems, skuMap);
 
-                  // 并行执行订单金额计算和促销规则查询
-                  const [orderData, promotion] = await Promise.all([
-                        orderService.calculateOrderAmount(cartItems, skuMap),
-                        orderService.findPromotion(orderData.totalAmount),
-                  ]);
+                  // 先计算订单金额
+                  const orderData = await orderService.calculateOrderAmount(cartItems, skuMap);
+                  // 然后使用计算得到的总金额查找适用的促销
+                  const promotion = await orderService.findPromotion(orderData.totalAmount);
 
                   // 计算折扣和最终支付金额
                   const discountAmount = orderService.calculateDiscount(orderData.totalAmount, promotion);
@@ -111,7 +110,7 @@ export const orderController = {
                   }, '订单创建成功，请在10分钟内完成支付');
             } catch (error) {
                   // 发生错误时自动回滚
-                  await orderService.handleOrderError(orderId, orderNo, error);
+                  // await orderService.handleOrderError(orderId, orderNo, error);
                   throw error;
             } finally {
                   // 释放并发锁

@@ -272,7 +272,7 @@ class InventoryService {
 
                         // 批量创建库存日志
                         await tx.stockLog.createMany({
-                              data: details.map(detail => ({
+                              data: details.map((detail: { quantity: any; type: StockChangeType; orderNo: string; }) => ({
                                     skuId,
                                     changeQuantity: detail.quantity,
                                     currentStock: newStock,
