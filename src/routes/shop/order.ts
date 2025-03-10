@@ -7,7 +7,9 @@ import {
       getOrderListSchema,
       getOrderDetailSchema,
       payOrderSchema,
-      quickBuySchema
+      quickBuySchema,
+      cancelOrderSchema,
+      confirmReceiptSchema,
 } from '../../validators/shop/order.validator';
 import { shopAuthMiddleware } from '../../middlewares/shopAuth.middleware';
 
@@ -48,6 +50,20 @@ router.post(
       '/:id/pay',
       validateRequest(payOrderSchema),
       orderController.payOrder
+);
+
+// 取消订单
+router.post(
+      '/:id/cancel', 
+      validateRequest(cancelOrderSchema), 
+      orderController.cancelOrder
+);
+
+// 确认收货
+router.post(
+      '/:id/confirm', 
+      validateRequest(confirmReceiptSchema), 
+      orderController.confirmReceipt
 );
 
 export default router;

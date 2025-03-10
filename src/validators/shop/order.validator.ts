@@ -47,3 +47,17 @@ export const payOrderSchema = z.object({
             transactionId: z.string().optional()
       })
 });
+
+// 取消订单验证
+export const cancelOrderSchema = z.object({
+      params: z.object({
+            id: z.string().uuid('无效的订单ID')
+      })
+});
+
+// 确认收货验证
+export const confirmReceiptSchema = z.object({
+      params: z.object({
+            id: z.string().uuid('无效的订单ID')
+      })
+});
