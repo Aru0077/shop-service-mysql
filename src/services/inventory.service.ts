@@ -1,138 +1,193 @@
-// 添加到 src/services/inventory.service.ts
+// src/services/inventory.service.ts
 import { prisma, redisClient } from '../config';
 import { StockChangeType } from '../constants/stock.constants';
+import { cacheUtils } from '../utils/cache.utils';
 
 class InventoryService {
-      // 库存预占
+      // 改进库存预占 - 使用分布式锁和 Lua 脚本保证原子性
       async preOccupyInventory(skuId: number, quantity: number, orderNo: string, timeout: number = 600): Promise<boolean> {
             try {
-                  // 1. 先检查库存是否足够
-                  const sku = await prisma.sku.findUnique({
-                        where: { id: skuId },
-                        select: { id: true, stock: true, lockedStock: true }
-                  });
+                  // 使用 Lua 脚本确保库存检查和锁定的原子性
+                  const luaScript = `
+        local skuKey = KEYS[1]
+        local lockKey = KEYS[2]
+        local releaseKey = KEYS[3]
+        local quantity = tonumber(ARGV[1])
+        local timeout = tonumber(ARGV[2])
+        
+        -- 检查是否已经有锁
+        if redis.call('exists', lockKey) == 1 then
+          return false
+        end
+        
+        -- 设置锁
+        redis.call('set', lockKey, 1, 'EX', 5)
+        
+        -- 检查当前库存（从缓存获取）
+        local currentStock = tonumber(redis.call('get', skuKey) or -1)
+        
+        -- 如果缓存中没有库存数据，返回失败
+        if currentStock == -1 then
+          redis.call('del', lockKey)
+          return false
+        end
+        
+        -- 检查库存是否足够
+        if currentStock < quantity then
+          redis.call('del', lockKey)
+          return false
+        end
+        
+        -- 更新缓存中的库存
+        redis.call('decrby', skuKey, quantity)
+        
+        -- 设置释放键，用于自动释放
+        redis.call('set', releaseKey, quantity, 'EX', timeout)
+        
+        -- 释放锁
+        redis.call('del', lockKey)
+        
+        return true
+      `;
 
-                  if (!sku || (sku.stock || 0) < quantity) {
-                        return false;
-                  }
-
-                  // 2. 加锁进行库存锁定
+                  // 准备 Redis 键和参数
+                  const skuStockKey = `inventory:stock:${skuId}`;
                   const lockKey = `inventory:lock:${skuId}`;
-                  const acquireLock = await redisClient.set(lockKey, '1', {
-                        EX: 5,  // 5秒锁超时
-                        NX: true
-                  });
+                  const releaseKey = `inventory:release:${skuId}:${orderNo}`;
 
-                  if (!acquireLock) {
-                        // 获取锁失败，稍后重试
+                  // 首先确保库存缓存存在
+                  await this.ensureStockCache(skuId);
+
+                  // 执行 Lua 脚本
+                  const result = await redisClient.eval(
+                        luaScript,
+                        {
+                          keys: [skuStockKey, lockKey, releaseKey],
+                          arguments: [quantity.toString(), timeout.toString()]
+                        }
+                      );
+
+                  if (!result) {
                         return false;
                   }
 
-                  try {
-                        // 3. 再次检查库存并执行预占
-                        const currentSku = await prisma.sku.findUnique({
-                              where: { id: skuId },
-                              select: { id: true, stock: true, lockedStock: true }
-                        });
-
-                        if (!currentSku || (currentSku.stock || 0) < quantity) {
-                              return false;
-                        }
-
-                        // 4. 更新锁定库存
-                        await prisma.sku.update({
-                              where: { id: skuId },
-                              data: {
-                                    lockedStock: { increment: quantity }
-                              }
-                        });
-
-                        // 5. 记录库存变更日志
-                        await prisma.stockLog.create({
-                              data: {
-                                    skuId,
-                                    changeQuantity: -quantity,
-                                    currentStock: currentSku.stock || 0,
-                                    type: StockChangeType.ORDER_LOCK,
-                                    orderNo,
-                                    remark: `订单${orderNo}预占库存`,
-                                    operator: 'system'
-                              }
-                        });
-
-                        // 6. 设置预占超时自动释放
-                        const releaseKey = `inventory:release:${skuId}:${orderNo}`;
-                        await redisClient.setEx(releaseKey, timeout, quantity.toString());
-
-                        return true;
-                  } finally {
-                        // 释放库存锁
-                        await redisClient.del(lockKey);
-                  }
+                  // 异步更新数据库库存
+                  await this.updateDatabaseStock(skuId, -quantity, StockChangeType.ORDER_LOCK, orderNo);
+                  return true;
             } catch (error) {
                   console.error('库存预占失败:', error);
                   return false;
             }
       }
 
-      // 确认扣减预占库存
-      async confirmPreOccupied(skuId: number, quantity: number, orderNo: string): Promise<boolean> {
-            try {
-                  // 1. 获取库存锁
-                  const lockKey = `inventory:lock:${skuId}`;
-                  const acquireLock = await redisClient.set(lockKey, '1', {
-                        EX: 5,
-                        NX: true
+      // 确保库存缓存存在
+      private async ensureStockCache(skuId: number): Promise<void> {
+            const skuStockKey = `inventory:stock:${skuId}`;
+            const exists = await redisClient.exists(skuStockKey);
+
+            if (!exists) {
+                  // 从数据库获取最新库存
+                  const sku = await prisma.sku.findUnique({
+                        where: { id: skuId },
+                        select: { stock: true }
                   });
 
-                  if (!acquireLock) {
-                        return false;
+                  if (sku) {
+                        // 设置库存缓存，有效期1小时
+                        await redisClient.set(skuStockKey, sku.stock || 0, { EX: 3600 });
                   }
+            }
+      }
 
-                  try {
-                        // 2. 删除预占释放标记
-                        const releaseKey = `inventory:release:${skuId}:${orderNo}`;
-                        await redisClient.del(releaseKey);
-
-                        // 3. 更新实际库存
-                        const sku = await prisma.sku.findUnique({
+      // 更新数据库库存记录
+      private async updateDatabaseStock(
+            skuId: number,
+            changeQuantity: number,
+            type: StockChangeType,
+            orderNo: string
+      ): Promise<void> {
+            try {
+                  await prisma.$transaction(async (tx) => {
+                        // 获取当前SKU
+                        const sku = await tx.sku.findUnique({
                               where: { id: skuId },
                               select: { id: true, stock: true, lockedStock: true }
                         });
 
-                        if (!sku) {
-                              return false;
+                        if (!sku) return;
+
+                        // 更新库存状态
+                        if (type === StockChangeType.ORDER_LOCK) {
+                              // 锁定库存 - 增加锁定数量
+                              await tx.sku.update({
+                                    where: { id: skuId },
+                                    data: {
+                                          lockedStock: { increment: Math.abs(changeQuantity) }
+                                    }
+                              });
+                        } else if (type === StockChangeType.ORDER_RELEASE) {
+                              // 释放锁定库存
+                              const newLockedStock = Math.max(0, (sku.lockedStock || 0) - Math.abs(changeQuantity));
+                              await tx.sku.update({
+                                    where: { id: skuId },
+                                    data: { lockedStock: newLockedStock }
+                              });
+                        } else if (type === StockChangeType.STOCK_OUT) {
+                              // 实际扣减库存和锁定库存
+                              const newStock = Math.max(0, (sku.stock || 0) - Math.abs(changeQuantity));
+                              const newLockedStock = Math.max(0, (sku.lockedStock || 0) - Math.abs(changeQuantity));
+                              await tx.sku.update({
+                                    where: { id: skuId },
+                                    data: {
+                                          stock: newStock,
+                                          lockedStock: newLockedStock
+                                    }
+                              });
                         }
 
-                        const newStock = Math.max(0, (sku.stock || 0) - quantity);
-                        const newLockedStock = Math.max(0, (sku.lockedStock || 0) - quantity);
-
-                        await prisma.sku.update({
-                              where: { id: skuId },
-                              data: {
-                                    stock: newStock,
-                                    lockedStock: newLockedStock
-                              }
-                        });
-
-                        // 4. 记录库存变更日志
-                        await prisma.stockLog.create({
+                        // 记录库存变更日志
+                        await tx.stockLog.create({
                               data: {
                                     skuId,
-                                    changeQuantity: -quantity,
-                                    currentStock: newStock,
-                                    type: StockChangeType.STOCK_OUT,
+                                    changeQuantity,
+                                    currentStock: sku.stock || 0,
+                                    type,
                                     orderNo,
-                                    remark: `订单${orderNo}确认扣减库存`,
+                                    remark: this.getStockChangeRemark(type, orderNo),
                                     operator: 'system'
                               }
                         });
+                  });
+            } catch (error) {
+                  console.error('更新数据库库存失败:', error);
+                  // 在这里重试或记录错误，但不抛出异常
+            }
+      }
 
-                        return true;
-                  } finally {
-                        // 释放锁
-                        await redisClient.del(lockKey);
-                  }
+      // 获取库存变更备注
+      private getStockChangeRemark(type: StockChangeType, orderNo: string): string {
+            switch (type) {
+                  case StockChangeType.ORDER_LOCK:
+                        return `订单${orderNo}预占库存`;
+                  case StockChangeType.ORDER_RELEASE:
+                        return `订单${orderNo}释放预占库存`;
+                  case StockChangeType.STOCK_OUT:
+                        return `订单${orderNo}确认扣减库存`;
+                  default:
+                        return `库存变更 - 订单${orderNo}`;
+            }
+      }
+
+      // 确认扣减预占库存
+      async confirmPreOccupied(skuId: number, quantity: number, orderNo: string): Promise<boolean> {
+            try {
+                  // 删除预占释放标记
+                  const releaseKey = `inventory:release:${skuId}:${orderNo}`;
+                  await redisClient.del(releaseKey);
+
+                  // 更新数据库库存
+                  await this.updateDatabaseStock(skuId, -quantity, StockChangeType.STOCK_OUT, orderNo);
+                  return true;
             } catch (error) {
                   console.error('确认库存扣减失败:', error);
                   return false;
@@ -142,62 +197,24 @@ class InventoryService {
       // 释放预占库存
       async releasePreOccupied(skuId: number, quantity: number, orderNo: string): Promise<boolean> {
             try {
-                  // 1. 获取锁
-                  const lockKey = `inventory:lock:${skuId}`;
-                  const acquireLock = await redisClient.set(lockKey, '1', {
-                        EX: 5,
-                        NX: true
-                  });
+                  // 删除预占释放标记
+                  const releaseKey = `inventory:release:${skuId}:${orderNo}`;
+                  await redisClient.del(releaseKey);
 
-                  if (!acquireLock) {
-                        return false;
-                  }
+                  // 更新缓存中的库存
+                  const skuStockKey = `inventory:stock:${skuId}`;
+                  await redisClient.incrBy(skuStockKey, quantity);
 
-                  try {
-                        // 2. 更新锁定库存
-                        const sku = await prisma.sku.findUnique({
-                              where: { id: skuId },
-                              select: { id: true, lockedStock: true }
-                        });
-
-                        if (!sku) {
-                              return false;
-                        }
-
-                        const newLockedStock = Math.max(0, (sku.lockedStock || 0) - quantity);
-
-                        await prisma.sku.update({
-                              where: { id: skuId },
-                              data: {
-                                    lockedStock: newLockedStock
-                              }
-                        });
-
-                        // 3. 记录库存变更日志
-                        await prisma.stockLog.create({
-                              data: {
-                                    skuId,
-                                    changeQuantity: quantity,
-                                    currentStock: sku.lockedStock || 0,
-                                    type: StockChangeType.ORDER_RELEASE,
-                                    orderNo,
-                                    remark: `订单${orderNo}释放预占库存`,
-                                    operator: 'system'
-                              }
-                        });
-
-                        return true;
-                  } finally {
-                        // 释放锁
-                        await redisClient.del(lockKey);
-                  }
+                  // 更新数据库库存
+                  await this.updateDatabaseStock(skuId, quantity, StockChangeType.ORDER_RELEASE, orderNo);
+                  return true;
             } catch (error) {
                   console.error('释放预占库存失败:', error);
                   return false;
             }
       }
 
-      // 库存批量更新优化 - 在inventoryService中添加
+      // 批量更新库存 - 优化为单个事务
       async batchUpdateInventory(updates: Array<{ skuId: number, quantity: number, type: StockChangeType, orderNo: string }>) {
             // 按SKU ID对更新进行分组
             const updatesBySkuId = new Map();
@@ -215,34 +232,79 @@ class InventoryService {
                   entry.details.push(update);
             }
 
-            // 批量处理库存更新
+            // 批量处理库存更新，使用单一事务
             await prisma.$transaction(async (tx) => {
                   for (const [skuId, data] of updatesBySkuId.entries()) {
                         const { totalQuantity, details } = data;
 
-                        // 一次性更新SKU库存
-                        const sku = await tx.sku.update({
+                        // 获取当前SKU
+                        const sku = await tx.sku.findUnique({
                               where: { id: skuId },
-                              data: { stock: { decrement: Math.abs(totalQuantity) } },
-                              select: { id: true, stock: true }
+                              select: { id: true, stock: true, lockedStock: true }
+                        });
+
+                        if (!sku) continue;
+
+                        // 计算新的库存和锁定库存
+                        let newStock = sku.stock || 0;
+                        let newLockedStock = sku.lockedStock || 0;
+
+                        // 根据操作类型调整库存
+                        for (const detail of details) {
+                              if (detail.type === StockChangeType.ORDER_LOCK) {
+                                    newLockedStock += Math.abs(detail.quantity);
+                              } else if (detail.type === StockChangeType.ORDER_RELEASE) {
+                                    newLockedStock = Math.max(0, newLockedStock - Math.abs(detail.quantity));
+                              } else if (detail.type === StockChangeType.STOCK_OUT) {
+                                    newStock = Math.max(0, newStock - Math.abs(detail.quantity));
+                                    newLockedStock = Math.max(0, newLockedStock - Math.abs(detail.quantity));
+                              }
+                        }
+
+                        // 更新SKU库存
+                        await tx.sku.update({
+                              where: { id: skuId },
+                              data: {
+                                    stock: newStock,
+                                    lockedStock: newLockedStock
+                              }
                         });
 
                         // 批量创建库存日志
                         await tx.stockLog.createMany({
-                              data: details.map((detail: { quantity: any; type: any; orderNo: any; }) => ({
+                              data: details.map(detail => ({
                                     skuId,
                                     changeQuantity: detail.quantity,
-                                    currentStock: sku.stock,
+                                    currentStock: newStock,
                                     type: detail.type,
                                     orderNo: detail.orderNo,
-                                    remark: `批量库存更新`,
+                                    remark: this.getStockChangeRemark(detail.type, detail.orderNo),
                                     operator: 'system'
                               }))
                         });
+
+                        // 更新库存缓存
+                        const skuStockKey = `inventory:stock:${skuId}`;
+                        await redisClient.set(skuStockKey, newStock, { EX: 3600 });
                   }
             });
 
             return true;
+      }
+
+      // 获取商品库存 - 带缓存
+      async getProductStock(productId: number): Promise<{ skuId: number, stock: number }[]> {
+            return await cacheUtils.multiLevelCache(
+                  `product:${productId}:stock`,
+                  async () => {
+                        const skus = await prisma.sku.findMany({
+                              where: { productId },
+                              select: { id: true, stock: true }
+                        });
+                        return skus.map(sku => ({ skuId: sku.id, stock: sku.stock || 0 }));
+                  },
+                  60 // 1分钟缓存
+            );
       }
 }
 

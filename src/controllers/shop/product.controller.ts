@@ -312,9 +312,9 @@ export const productController = {
             const { id } = req.params;
             const productId = Number(id);
 
-            // 1. 优先返回基础信息
+            // 1. 获取商品基础信息（不包含SKU），优先从缓存获取
             const basicCacheKey = `shop:product:basic:${productId}`;
-            const basicProductDetail = await cacheUtils.getOrSet(basicCacheKey, async () => {
+            const basicProductDetail = await cacheUtils.multiLevelCache(basicCacheKey, async () => {
                   const product = await prisma.product.findUnique({
                         where: {
                               id: productId,
@@ -344,7 +344,7 @@ export const productController = {
                   return product;
             }, CACHE_LEVELS.SHORT); // 5分钟缓存
 
-            // 2. 立即返回基础信息，告知客户端SKU信息将稍后返回
+            // 2. 立即返回基础信息，告知客户端SKU信息将稍后加载
             res.sendSuccess({
                   ...basicProductDetail,
                   skus: [],
@@ -352,18 +352,16 @@ export const productController = {
                   validSpecCombinations: {},
                   loadingSkus: true
             });
-
-            // 3. 客户端收到基础信息后，发起单独的SKU数据请求
-            // 需要添加新的端点用于获取SKU信息
       }),
 
-      // 新增SKU信息单独获取端点
+      // 新增SKU信息单独获取端点 
       getProductSkus: asyncHandler(async (req: Request, res: Response) => {
             const { id } = req.params;
             const productId = Number(id);
 
             const skuCacheKey = `shop:product:skus:${productId}`;
-            const skuData = await cacheUtils.getOrSet(skuCacheKey, async () => {
+            const skuData = await cacheUtils.multiLevelCache(skuCacheKey, async () => {
+                  // 使用索引优化查询
                   const skus = await prisma.sku.findMany({
                         where: {
                               productId,
@@ -381,7 +379,7 @@ export const productController = {
                         }
                   });
 
-                  // 获取规格矩阵
+                  // 高效获取规格矩阵
                   const specs = await prisma.spec.findMany({
                         where: {
                               skuSpecs: {
@@ -502,8 +500,7 @@ export const productController = {
             res.sendSuccess(homeData);
       }),
 
-      // 搜索商品
-      // 改进商品搜索功能
+      // 搜索商品 
       searchProducts: asyncHandler(async (req: Request, res: Response) => {
             const { keyword, page = '1', limit = '10', sortBy = 'relevance', categoryId } = req.query;
             const pageNumber = Number(page);
@@ -512,48 +509,79 @@ export const productController = {
 
             // 使用短时间缓存，因为搜索结果较为个性化
             const cacheKey = `shop:products:search:${keyword}:${categoryId || ''}:${sortBy}:${page}:${limit}`;
-            const searchResults = await cacheUtils.getOrSet(cacheKey, async () => {
-                  // 构建基础查询条件
-                  const whereConditions: any = {
+            const searchResults = await cacheUtils.multiLevelCache(cacheKey, async () => {
+                  // 1. 构建优化的搜索条件
+                  let searchCondition: any = {
                         status: ProductStatus.ONLINE
                   };
 
-                  // 关键词搜索条件
+                  // 2. 智能处理关键词搜索
                   if (keyword) {
                         // 拆分关键词实现更智能的搜索
                         const keywords = (keyword as string).trim().split(/\s+/).filter(Boolean);
 
                         if (keywords.length > 0) {
-                              whereConditions.OR = [
-                                    // 精确匹配名称
+                              // 使用组合搜索条件，按重要性排序
+                              searchCondition.OR = [
+                                    // 精确匹配名称（最高优先级）
                                     { name: { contains: keyword as string } },
                                     // 匹配商品编码
                                     { productCode: { contains: keyword as string } },
-                                    // 匹配分词后的关键词
+                                    // 匹配分词后的关键词（次优先级）
                                     ...keywords.map(kw => ({ name: { contains: kw } }))
                               ];
                         }
                   }
 
-                  // 分类过滤
+                  // 3. 分类过滤
                   if (categoryId) {
-                        whereConditions.categoryId = parseInt(categoryId as string);
+                        // 如果有分类ID，检查该分类是否有子分类
+                        const category = await prisma.category.findUnique({
+                              where: { id: parseInt(categoryId as string) },
+                              select: { id: true, level: true }
+                        });
+
+                        if (category) {
+                              if (category.level === 1) {
+                                    // 一级分类：查询所有子分类
+                                    const subCategories = await prisma.category.findMany({
+                                          where: { parentId: parseInt(categoryId as string) },
+                                          select: { id: true }
+                                    });
+
+                                    const categoryIds = [parseInt(categoryId as string), ...subCategories.map(c => c.id)];
+                                    searchCondition.categoryId = { in: categoryIds };
+                              } else {
+                                    // 二级分类：直接查询
+                                    searchCondition.categoryId = parseInt(categoryId as string);
+                              }
+                        }
                   }
 
-                  // 查询匹配商品总数
-                  const total = await prisma.product.count({
-                        where: whereConditions
-                  });
+                  // 4. 通过计数查询获取总数
+                  const total = await prisma.product.count({ where: searchCondition });
 
-                  // 构建排序条件
+                  // 5. 构建优化的排序条件
                   let orderBy: any = {};
                   switch (sortBy) {
                         case 'price_asc':
-                              // 这里需要改进，理想情况下使用子查询获取最低价格
-                              orderBy = { skus: { _count: 'asc' } }; // 临时方案
+                              // 使用子查询获取最低价格，通过Prisma原生SQL
+                              orderBy = {
+                                    skus: {
+                                          _min: {
+                                                price: 'asc'
+                                          }
+                                    }
+                              };
                               break;
                         case 'price_desc':
-                              orderBy = { skus: { _count: 'desc' } }; // 临时方案
+                              orderBy = {
+                                    skus: {
+                                          _min: {
+                                                price: 'desc'
+                                          }
+                                    }
+                              };
                               break;
                         case 'sales':
                               orderBy = { salesCount: 'desc' };
@@ -563,7 +591,7 @@ export const productController = {
                               break;
                         case 'relevance':
                         default:
-                              // 默认按相关性（先按匹配度，再按销量）
+                              // 相关性排序 - 首先按匹配度，然后按销量和创建时间
                               orderBy = [
                                     { salesCount: 'desc' },
                                     { createdAt: 'desc' }
@@ -571,9 +599,9 @@ export const productController = {
                               break;
                   }
 
-                  // 查询匹配商品列表
+                  // 6. 查询匹配商品数据，使用索引优化
                   const products = await prisma.product.findMany({
-                        where: whereConditions,
+                        where: searchCondition,
                         include: {
                               category: {
                                     select: {
@@ -582,16 +610,14 @@ export const productController = {
                                     }
                               },
                               skus: {
+                                    orderBy: { price: 'asc' },
+                                    take: 1,
                                     select: {
                                           id: true,
                                           price: true,
                                           promotion_price: true,
                                           stock: true
-                                    },
-                                    orderBy: {
-                                          price: 'asc'
-                                    },
-                                    take: 1 // 只取最低价格的SKU
+                                    }
                               }
                         },
                         orderBy,
@@ -599,13 +625,34 @@ export const productController = {
                         take: limitNumber
                   });
 
+                  // 7. 增强返回结果
+                  const enhancedProducts = products.map(product => {
+                        // 计算显示价格和折扣率
+                        const sku = product.skus[0];
+                        const displayPrice = sku?.promotion_price || sku?.price || 0;
+                        const discount = sku?.promotion_price && sku?.price ?
+                              Math.round((sku.promotion_price / sku.price) * 100) : null;
+
+                        return {
+                              ...product,
+                              displayPrice,
+                              discount
+                        };
+                  });
+
                   return {
                         total,
                         page: pageNumber,
                         limit: limitNumber,
-                        data: products
+                        data: enhancedProducts,
+                        // 添加搜索元数据，帮助客户端优化UI
+                        meta: {
+                              hasMoreResults: total > skip + products.length,
+                              searchTerm: keyword,
+                              appliedFilters: categoryId ? { categoryId } : {}
+                        }
                   };
-            }, CACHE_LEVELS.MICRO); // 短时间缓存
+            }, CACHE_LEVELS.MICRO); // 10秒缓存
 
             res.sendSuccess(searchResults);
       }),

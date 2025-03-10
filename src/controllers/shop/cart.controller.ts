@@ -4,6 +4,7 @@ import { prisma, redisClient } from '../../config';
 import { asyncHandler } from '../../utils/http.utils';
 import { AppError } from '../../utils/http.utils';
 import { ProductStatus } from '@prisma/client';
+import { cacheUtils } from '../../utils/cache.utils';
 
 export const cartController = {
       // 优化后的addToCart方法
@@ -212,85 +213,111 @@ export const cartController = {
       }),
 
       // 获取购物车列表
+      // 优化后的购物车列表查询
       getCartList: asyncHandler(async (req: Request, res: Response) => {
             const userId = req.shopUser?.id;
             const { page = '1', limit = '10' } = req.query;
             const pageNumber = parseInt(page as string);
             const limitNumber = parseInt(limit as string);
             const skip = (pageNumber - 1) * limitNumber;
-        
+
             if (!userId) {
-                throw new AppError(401, 'fail', '请先登录');
+                  throw new AppError(401, 'fail', '请先登录');
             }
-        
-            // 获取购物车总数
-            const total = await prisma.userCartItem.count({
-                where: { userId }
-            });
-        
-            // 获取购物车项，只包含允许的关联
-            const cartItems = await prisma.userCartItem.findMany({
-                where: { userId },
-                include: {
-                    product: {
-                        select: {
-                            id: true,
-                            name: true,
-                            mainImage: true,
-                            status: true
-                        }
-                    }
-                },
-                orderBy: { updatedAt: 'desc' },
-                skip,
-                take: limitNumber
-            });
-        
-            // 获取SKU信息 - 单独查询
-            const skuIds = cartItems.map(item => item.skuId);
-            const skus = await prisma.sku.findMany({
-                where: {
-                    id: { in: skuIds }
-                },
-                include: {
-                    sku_specs: {
-                        include: {
-                            spec: true,
-                            specValue: true
-                        }
-                    }
-                }
-            });
-        
-            // 创建SKU映射以便快速查找
-            const skuMap = new Map(skus.map(sku => [sku.id, sku]));
-        
-            // 处理数据并检查商品状态和库存
-            const processedCartItems = cartItems.map(item => {
-                const sku = skuMap.get(item.skuId);
-                return {
-                    id: item.id,
-                    userId: item.userId,
-                    productId: item.productId,
-                    skuId: item.skuId,
-                    quantity: item.quantity,
-                    createdAt: item.createdAt,
-                    updatedAt: item.updatedAt,
-                    product: item.product,
-                    skuData: sku || null, // 使用不同的属性名避免类型冲突
-                    isAvailable: 
-                        item.product.status === ProductStatus.ONLINE && 
-                        sku && (sku.stock || 0) > 0
-                };
-            });
-        
-            res.sendSuccess({
-                total,
-                page: pageNumber,
-                limit: limitNumber,
-                data: processedCartItems
-            });
-        }),
+
+            // 使用缓存减少数据库查询
+            const cacheKey = `cart:${userId}:${pageNumber}:${limitNumber}`;
+            const cartData = await cacheUtils.multiLevelCache(cacheKey, async () => {
+                  // 1. 只查询购物车基本信息
+                  const [total, cartItems] = await Promise.all([
+                        prisma.userCartItem.count({
+                              where: { userId }
+                        }),
+                        prisma.userCartItem.findMany({
+                              where: { userId },
+                              select: {
+                                    id: true,
+                                    productId: true,
+                                    skuId: true,
+                                    quantity: true,
+                                    updatedAt: true,
+                                    userId: true 
+                              },
+                              orderBy: { updatedAt: 'desc' },
+                              skip,
+                              take: limitNumber
+                        })
+                  ]);
+
+                  if (cartItems.length === 0) {
+                        return { total, page: pageNumber, limit: limitNumber, data: [] };
+                  }
+
+                  // 2. 分别批量查询产品和SKU信息
+                  const productIds = [...new Set(cartItems.map(item => item.productId))];
+                  const skuIds = [...new Set(cartItems.map(item => item.skuId))];
+
+                  const [products, skus] = await Promise.all([
+                        prisma.product.findMany({
+                              where: { id: { in: productIds } },
+                              select: {
+                                    id: true,
+                                    name: true,
+                                    mainImage: true,
+                                    status: true
+                              }
+                        }),
+                        prisma.sku.findMany({
+                              where: { id: { in: skuIds } },
+                              select: {
+                                    id: true,
+                                    price: true,
+                                    promotion_price: true,
+                                    stock: true,
+                                    sku_specs: {
+                                          include: {
+                                                spec: { select: { name: true } },
+                                                specValue: { select: { value: true } }
+                                          }
+                                    }
+                              }
+                        })
+                  ]);
+
+                  // 3. 创建映射以便快速查找
+                  const productMap = new Map(products.map(p => [p.id, p]));
+                  const skuMap = new Map(skus.map(s => [s.id, s]));
+
+                  // 4. 组合数据
+                  const processedCartItems = cartItems.map(item => {
+                        const product = productMap.get(item.productId);
+                        const sku = skuMap.get(item.skuId);
+
+                        return {
+                              id: item.id,
+                              userId: item.userId,
+                              productId: item.productId,
+                              skuId: item.skuId,
+                              quantity: item.quantity,
+                              updatedAt: item.updatedAt,
+                              product: product || null,
+                              skuData: sku || null,
+                              isAvailable:
+                                    product?.status === ProductStatus.ONLINE &&
+                                    sku && (sku.stock || 0) > 0
+                        };
+                  });
+
+                  return {
+                        total,
+                        page: pageNumber,
+                        limit: limitNumber,
+                        data: processedCartItems
+                  };
+            }, 30); // 30秒缓存
+
+            res.sendSuccess(cartData);
+      }),
 
       // 清空购物车
       clearCart: asyncHandler(async (req: Request, res: Response) => {

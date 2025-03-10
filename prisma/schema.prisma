@@ -71,7 +71,11 @@ model Product {
   @@index([name, status], map: "idx_name_status")
   @@index([is_promotion, status], map: "idx_promotion_status")
   @@index([categoryId, status], map: "idx_category_status")
-  @@index([name, productCode], map: "idx_name_code")
+  @@index([name, productCode], map: "idx_name_code") 
+  @@index([name(ops: raw("gin_trgm_ops"))], map: "idx_product_name_search", type: Raw("gin")) 
+  @@index([status, salesCount(sort: Desc)], map: "idx_status_sales") 
+  @@index([status, is_promotion], map: "idx_status_promotion")
+
   @@map("products")
 }
 
@@ -92,6 +96,10 @@ model Sku {
   stockLogs       StockLog[]
 
   @@index([productId], map: "product_id")
+  @@index([price], map: "idx_price")
+  @@index([promotion_price], map: "idx_promotion_price")
+  @@index([stock], map: "idx_stock")
+
   @@map("skus")
 }
 
@@ -165,10 +173,12 @@ model Order {
   discountAmount  Int      @default(0) @map("discount_amount") // 优惠金额
   promotion       Promotion? @relation(fields: [promotionId], references: [id])
 
-  @@index([userId, orderStatus], map: "idx_user_status")
+  @@index([userId, orderStatus, createdAt(sort: Desc)], map: "idx_user_status_created")
   @@index([orderStatus, createdAt], map: "idx_status_created")
   @@index([createdAt], map: "idx_created")
   @@index([promotionId], map: "idx_promotion")
+  @@index([paymentStatus, orderStatus], map: "idx_payment_order_status")
+  
   @@map("orders")
 }
 
