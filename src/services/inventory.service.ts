@@ -196,6 +196,54 @@ class InventoryService {
                   return false;
             }
       }
+
+      // 库存批量更新优化 - 在inventoryService中添加
+      async batchUpdateInventory(updates: Array<{ skuId: number, quantity: number, type: StockChangeType, orderNo: string }>) {
+            // 按SKU ID对更新进行分组
+            const updatesBySkuId = new Map();
+
+            for (const update of updates) {
+                  if (!updatesBySkuId.has(update.skuId)) {
+                        updatesBySkuId.set(update.skuId, {
+                              totalQuantity: 0,
+                              details: []
+                        });
+                  }
+
+                  const entry = updatesBySkuId.get(update.skuId);
+                  entry.totalQuantity += update.quantity;
+                  entry.details.push(update);
+            }
+
+            // 批量处理库存更新
+            await prisma.$transaction(async (tx) => {
+                  for (const [skuId, data] of updatesBySkuId.entries()) {
+                        const { totalQuantity, details } = data;
+
+                        // 一次性更新SKU库存
+                        const sku = await tx.sku.update({
+                              where: { id: skuId },
+                              data: { stock: { decrement: Math.abs(totalQuantity) } },
+                              select: { id: true, stock: true }
+                        });
+
+                        // 批量创建库存日志
+                        await tx.stockLog.createMany({
+                              data: details.map((detail: { quantity: any; type: any; orderNo: any; }) => ({
+                                    skuId,
+                                    changeQuantity: detail.quantity,
+                                    currentStock: sku.stock,
+                                    type: detail.type,
+                                    orderNo: detail.orderNo,
+                                    remark: `批量库存更新`,
+                                    operator: 'system'
+                              }))
+                        });
+                  }
+            });
+
+            return true;
+      }
 }
 
 export const inventoryService = new InventoryService();

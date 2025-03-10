@@ -6,7 +6,7 @@ import { AppError } from '../../utils/http.utils';
 import { ProductStatus } from '@prisma/client';
 
 export const cartController = {
-      // 添加商品到购物车 - 限制短时间内同一商品的添加频率 
+      // 优化后的addToCart方法
       addToCart: asyncHandler(async (req: Request, res: Response) => {
             const userId = req.shopUser?.id;
             const { productId, skuId, quantity = 1 } = req.body;
@@ -15,109 +15,121 @@ export const cartController = {
                   throw new AppError(401, 'fail', '请先登录');
             }
 
-            // 缓存key控制重复请求 - 限制短时间内同一商品的添加频率
+
+            // 使用Redis缓存控制重复请求
             const throttleKey = `cart:throttle:${userId}:${productId}:${skuId}`;
             const isThrottled = await redisClient.exists(throttleKey);
             if (isThrottled) {
-                  // 返回成功但不执行数据库操作，前端可继续操作
                   return res.sendSuccess(null, '商品已添加到购物车');
             }
 
-            // 设置300ms的节流时间，合并短时间内的重复请求
+            // 设置短暂的节流时间 - 300ms
             await redisClient.setEx(throttleKey, 1, '1');
 
-            // 1. 并行验证商品和SKU状态
-            const [product, sku, existingCartItem] = await Promise.all([
-                  prisma.product.findFirst({
-                        where: {
-                              id: productId,
-                              status: ProductStatus.ONLINE
-                        },
-                        select: { id: true, name: true }
-                  }),
-                  prisma.sku.findFirst({
-                        where: {
-                              id: skuId,
-                              productId
-                        },
-                        select: { id: true, stock: true, price: true, promotion_price: true }
-                  }),
-                  prisma.userCartItem.findFirst({
-                        where: {
-                              userId,
-                              productId,
-                              skuId
-                        },
-                        select: { id: true, quantity: true }
-                  })
-            ]);
+            try {
+                  // 单次查询获取所有必要数据
+                  const [existingCartItem, productAndSku] = await Promise.all([
+                        // 查询购物车中是否已存在
+                        prisma.userCartItem.findFirst({
+                              where: { userId, productId, skuId }
+                        }),
+                        // 单次查询获取商品和SKU信息
+                        prisma.product.findFirst({
+                              where: {
+                                    id: productId,
+                                    status: ProductStatus.ONLINE
+                              },
+                              select: {
+                                    id: true,
+                                    name: true,
+                                    mainImage: true,
+                                    skus: {
+                                          where: { id: skuId },
+                                          select: {
+                                                id: true,
+                                                price: true,
+                                                promotion_price: true,
+                                                stock: true
+                                          }
+                                    }
+                              }
+                        })
+                  ]);
 
-            // 2. 快速校验
-            if (!product) {
-                  throw new AppError(404, 'fail', '商品不存在或已下架');
-            }
+                  // 商品或SKU不存在
+                  if (!productAndSku || productAndSku.skus.length === 0) {
+                        throw new AppError(404, 'fail', '商品不存在或已下架');
+                  }
 
-            if (!sku) {
-                  throw new AppError(404, 'fail', 'SKU不存在');
-            }
+                  const product = productAndSku;
+                  const sku = productAndSku.skus[0];
 
-            // 3. 库存检查（预留策略：允许加入购物车但警告库存不足）
-            const isLowStock = (sku.stock || 0) < quantity;
-            const effectiveQuantity = isLowStock ? sku.stock || 0 : quantity;
+                  // 库存检查
+                  const isLowStock = (sku.stock || 0) < quantity;
+                  const effectiveQuantity = isLowStock ? sku.stock || 0 : quantity;
 
-            let cartItem;
-            let cartItemCount = 0;
+                  if (effectiveQuantity <= 0) {
+                        throw new AppError(400, 'fail', '商品库存不足');
+                  }
 
-            // 4. 使用事务保证数据一致性
-            if (existingCartItem) {
-                  // 更新购物车商品数量
-                  const newQuantity = existingCartItem.quantity + effectiveQuantity;
+                  // 使用单个事务处理购物车更新和计数
+                  const result = await prisma.$transaction(async (tx) => {
+                        let cartItem;
 
-                  cartItem = await prisma.userCartItem.update({
-                        where: { id: existingCartItem.id },
-                        data: {
-                              quantity: newQuantity,
-                              updatedAt: new Date()
+                        if (existingCartItem) {
+                              // 更新购物车项
+                              cartItem = await tx.userCartItem.update({
+                                    where: { id: existingCartItem.id },
+                                    data: {
+                                          quantity: existingCartItem.quantity + effectiveQuantity,
+                                          updatedAt: new Date()
+                                    }
+                              });
+                        } else {
+                              // 创建新购物车项
+                              cartItem = await tx.userCartItem.create({
+                                    data: {
+                                          userId,
+                                          productId,
+                                          skuId,
+                                          quantity: effectiveQuantity
+                                    }
+                              });
                         }
+
+                        // 直接在事务中获取购物车总数
+                        const cartItemCount = await tx.userCartItem.count({
+                              where: { userId }
+                        });
+
+                        return { cartItem, cartItemCount };
                   });
-            } else {
-                  // 添加新商品到购物车
-                  cartItem = await prisma.userCartItem.create({
-                        data: {
-                              userId,
-                              productId,
-                              skuId,
-                              quantity: effectiveQuantity
-                        }
-                  });
+
+                  // 构建响应数据
+                  const responseData = {
+                        cartItem: {
+                              ...result.cartItem,
+                              product: { id: product.id, name: product.name },
+                              sku: {
+                                    id: sku.id,
+                                    price: sku.promotion_price || sku.price,
+                                    stock: sku.stock
+                              }
+                        },
+                        cartItemCount: result.cartItemCount,
+                        isLowStock
+                  };
+
+                  // 返回适当的提示
+                  if (isLowStock) {
+                        return res.sendSuccess(responseData, '已加入购物车，但库存不足');
+                  }
+
+                  res.sendSuccess(responseData, '商品已成功添加到购物车');
+            } catch (error) {
+                  if (error instanceof AppError) throw error;
+                  throw new AppError(500, 'fail', '添加购物车失败，请稍后重试');
             }
-
-            // 5. 获取购物车商品总数
-            cartItemCount = await prisma.userCartItem.count({
-                  where: { userId }
-            });
-
-            // 构建响应数据，包含价格和库存信息
-            const responseData = {
-                  cartItem: {
-                        ...cartItem,
-                        product: { id: product.id, name: product.name },
-                        sku: {
-                              id: sku.id,
-                              price: sku.promotion_price || sku.price,
-                              stock: sku.stock
-                        }
-                  },
-                  cartItemCount,
-                  isLowStock
-            };
-
-            // 返回提示信息
-            if (isLowStock) {
-                  return res.sendSuccess(responseData, '已加入购物车，但库存不足');
-            }
-
-            res.sendSuccess(responseData, '商品已成功添加到购物车');
       }),
 
       // 更新购物车商品数量
@@ -206,66 +218,79 @@ export const cartController = {
             const pageNumber = parseInt(page as string);
             const limitNumber = parseInt(limit as string);
             const skip = (pageNumber - 1) * limitNumber;
-
+        
             if (!userId) {
-                  throw new AppError(401, 'fail', '请先登录');
+                throw new AppError(401, 'fail', '请先登录');
             }
-
+        
             // 获取购物车总数
             const total = await prisma.userCartItem.count({
-                  where: { userId }
+                where: { userId }
             });
-
-            // 获取购物车项
+        
+            // 获取购物车项，只包含允许的关联
             const cartItems = await prisma.userCartItem.findMany({
-                  where: { userId },
-                  include: {
-                        product: {
-                              select: {
-                                    id: true,
-                                    name: true,
-                                    mainImage: true,
-                                    status: true
-                              }
+                where: { userId },
+                include: {
+                    product: {
+                        select: {
+                            id: true,
+                            name: true,
+                            mainImage: true,
+                            status: true
                         }
-                  },
-                  orderBy: { updatedAt: 'desc' },
-                  skip,
-                  take: limitNumber
+                    }
+                },
+                orderBy: { updatedAt: 'desc' },
+                skip,
+                take: limitNumber
             });
-
-            // 获取购物车中商品的SKU信息
-            const cartItemsWithSkuInfo = await Promise.all(
-                  cartItems.map(async (item) => {
-                        const sku = await prisma.sku.findUnique({
-                              where: { id: item.skuId },
-                              include: {
-                                    sku_specs: {
-                                          include: {
-                                                spec: true,
-                                                specValue: true
-                                          }
-                                    }
-                              }
-                        });
-
-                        return {
-                              ...item,
-                              sku,
-                              isAvailable:
-                                    item.product.status === ProductStatus.ONLINE &&
-                                    sku && (sku.stock || 0) > 0
-                        };
-                  })
-            );
-
+        
+            // 获取SKU信息 - 单独查询
+            const skuIds = cartItems.map(item => item.skuId);
+            const skus = await prisma.sku.findMany({
+                where: {
+                    id: { in: skuIds }
+                },
+                include: {
+                    sku_specs: {
+                        include: {
+                            spec: true,
+                            specValue: true
+                        }
+                    }
+                }
+            });
+        
+            // 创建SKU映射以便快速查找
+            const skuMap = new Map(skus.map(sku => [sku.id, sku]));
+        
+            // 处理数据并检查商品状态和库存
+            const processedCartItems = cartItems.map(item => {
+                const sku = skuMap.get(item.skuId);
+                return {
+                    id: item.id,
+                    userId: item.userId,
+                    productId: item.productId,
+                    skuId: item.skuId,
+                    quantity: item.quantity,
+                    createdAt: item.createdAt,
+                    updatedAt: item.updatedAt,
+                    product: item.product,
+                    skuData: sku || null, // 使用不同的属性名避免类型冲突
+                    isAvailable: 
+                        item.product.status === ProductStatus.ONLINE && 
+                        sku && (sku.stock || 0) > 0
+                };
+            });
+        
             res.sendSuccess({
-                  total,
-                  page: pageNumber,
-                  limit: limitNumber,
-                  data: cartItemsWithSkuInfo
+                total,
+                page: pageNumber,
+                limit: limitNumber,
+                data: processedCartItems
             });
-      }),
+        }),
 
       // 清空购物车
       clearCart: asyncHandler(async (req: Request, res: Response) => {
