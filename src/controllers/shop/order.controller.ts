@@ -26,7 +26,7 @@ function generateOrderNo(): string {
 
 
 export const orderController = {
-      // 创建订单  - 优化后的创建订单方法 - 插入到order.controller.ts中
+      // 创建订单  - 优化后的创建订单方法 - 插入到order.controller.ts中 
       createOrder: asyncHandler(async (req: Request, res: Response) => {
             const userId = req.shopUser?.id;
             const { addressId, cartItemIds, remark } = req.body;
@@ -478,7 +478,7 @@ export const orderController = {
             });
       }),
 
-      // 支付订单  - 优化后的支付订单方法 - 插入到order.controller.ts中
+      // 支付订单  - 优化后的支付订单方法 - 插入到order.controller.ts中 
       payOrder: asyncHandler(async (req: Request, res: Response) => {
             const userId = req.shopUser?.id;
             const { id } = req.params;

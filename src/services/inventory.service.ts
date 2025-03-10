@@ -1,5 +1,4 @@
 // 添加到 src/services/inventory.service.ts
-
 import { prisma, redisClient } from '../config';
 import { StockChangeType } from '../constants/stock.constants';
 

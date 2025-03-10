@@ -159,8 +159,9 @@ orderQueue.process('processOrderPayment', async (job) => {
             throw error;
       }
 });
- 
+
 // 修改处理订单库存和订单项的方法
+// src/queues/order.queue.ts 优化处理订单项方法
 orderQueue.process('processOrderItems', async (job) => {
       const { orderId, orderItems, orderNo, inventoryUpdates, cartItemIds } = job.data;
 
@@ -234,6 +235,8 @@ orderQueue.process('processOrderItems', async (job) => {
             throw error;
       }
 });
+
+
 // 监听队列错误
 orderQueue.on('error', (error) => {
       // logger.error('订单队列错误:', error);

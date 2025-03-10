@@ -4,8 +4,7 @@ import { OrderStatus, PaymentStatus } from '../constants/orderStatus.enum';
 import { StockChangeType } from '../constants/stock.constants';
 
 class OrderScheduleService {
-      // 处理超时未支付订单
-      // src/services/orderSchedule.service.ts 优化版
+      // 处理超时未支付订单 
       async cancelUnpaidOrders() {
             try {
                   const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
@@ -71,7 +70,7 @@ class OrderScheduleService {
                                     });
                               }
 
-                              // 3. 使用事务批量更新库存（如果Prisma支持批量更新）
+                              // 3. 使用事务批量更新库存
                               for (const update of stockUpdates) {
                                     await tx.sku.update({
                                           where: { id: update.id },
@@ -90,7 +89,8 @@ class OrderScheduleService {
             } catch (error) {
                   console.error('取消超时未支付订单失败:', error);
             }
-      }
+      };
+
       // 处理已支付订单自动完成
       async completeOrders() {
             try {
@@ -131,7 +131,7 @@ class OrderScheduleService {
             } catch (error) {
                   console.error('自动完成订单失败:', error);
             }
-      }
+      };
 
       // 启动定时任务
       startScheduleTasks() {
@@ -142,7 +142,7 @@ class OrderScheduleService {
             setInterval(() => this.completeOrders(), 5 * 60 * 1000);
 
             console.log('✅ 订单定时任务已启动');
-      }
+      };
 }
 
 export const orderScheduleService = new OrderScheduleService();

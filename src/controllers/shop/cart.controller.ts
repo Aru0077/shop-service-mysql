@@ -6,7 +6,7 @@ import { AppError } from '../../utils/http.utils';
 import { ProductStatus } from '@prisma/client';
 
 export const cartController = {
-      // 添加商品到购物车 - 限制短时间内同一商品的添加频率
+      // 添加商品到购物车 - 限制短时间内同一商品的添加频率 
       addToCart: asyncHandler(async (req: Request, res: Response) => {
             const userId = req.shopUser?.id;
             const { productId, skuId, quantity = 1 } = req.body;
