@@ -62,10 +62,10 @@ class InventoryService {
                   const result = await redisClient.eval(
                         luaScript,
                         {
-                          keys: [skuStockKey, lockKey, releaseKey],
-                          arguments: [quantity.toString(), timeout.toString()]
+                              keys: [skuStockKey, lockKey, releaseKey],
+                              arguments: [quantity.toString(), timeout.toString()]
                         }
-                      );
+                  );
 
                   if (!result) {
                         return false;
@@ -73,11 +73,30 @@ class InventoryService {
 
                   // 异步更新数据库库存
                   await this.updateDatabaseStock(skuId, -quantity, StockChangeType.ORDER_LOCK, orderNo);
+
+
                   return true;
             } catch (error) {
                   console.error('库存预占失败:', error);
                   return false;
             }
+      }
+
+      // 添加库存异常监控系统
+      private async logInventoryAnomaly(skuId: number, expected: number, actual: number, reason: string): Promise<void> {
+            console.error(`库存异常: SKU ID ${skuId}, 预期: ${expected}, 实际: ${actual}, 原因: ${reason}`);
+            // 可以将异常记录到数据库或发送告警
+            await prisma.stockLog.create({
+                  data: {
+                        skuId,
+                        changeQuantity: 0,
+                        currentStock: actual,
+                        type: StockChangeType.OTHER,
+                        orderNo: 'SYSTEM_AUDIT',
+                        remark: `库存异常检测: ${reason}`,
+                        operator: 'system_monitor'
+                  }
+            });
       }
 
       // 确保库存缓存存在
@@ -305,6 +324,46 @@ class InventoryService {
                   },
                   60 // 1分钟缓存
             );
+      }
+
+      // 添加库存审计任务方法 
+      async auditInventory(): Promise<void> {
+            try {
+                  // 获取所有SKU
+                  const skus = await prisma.sku.findMany({
+                        select: { id: true, stock: true, lockedStock: true }
+                  });
+
+                  // 批量检查并修复
+                  for (const sku of skus) {
+                        const cachedStock = await redisClient.get(`inventory:stock:${sku.id}`);
+                        // 处理sku.stock可能为null的情况
+                        const actualStock = sku.stock ?? 0; // 使用空值合并运算符，如果为null则使用0
+
+                        // 检查缓存是否存在
+                        if (cachedStock === null) {
+                              await redisClient.set(`inventory:stock:${sku.id}`, actualStock.toString(), { EX: 3600 });
+                              continue;
+                        }
+
+                        // 检查库存是否一致
+                        const cachedStockNum = parseInt(cachedStock);
+                        if (Math.abs(actualStock - cachedStockNum) > 0) {
+                              await this.logInventoryAnomaly(
+                                    sku.id,
+                                    actualStock,
+                                    cachedStockNum,
+                                    '定期审计发现不一致'
+                              );
+                              // 修复缓存
+                              await redisClient.set(`inventory:stock:${sku.id}`, actualStock.toString(), { EX: 3600 });
+                        }
+                  }
+
+                  console.log(`库存审计完成，检查了 ${skus.length} 个SKU`);
+            } catch (error) {
+                  console.error('库存审计失败:', error);
+            }
       }
 }
 

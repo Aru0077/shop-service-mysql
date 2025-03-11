@@ -1,12 +1,21 @@
 // src/services/orderSchedule.service.ts
+import cron from 'node-cron';
 import { prisma } from '../config';
 import { OrderStatus, PaymentStatus } from '../constants/orderStatus.enum';
 import { StockChangeType } from '../constants/stock.constants';
+import { logger } from '../utils/logger';
+import { inventoryService } from './inventory.service';
 
 class OrderScheduleService {
+      private taskRegistry: Record<string, cron.ScheduledTask> = {};
+      private retryCount: Record<string, number> = {};
+      private maxRetries = 3;
+
       // 处理超时未支付订单 
       async cancelUnpaidOrders() {
+            const taskName = 'cancelUnpaidOrders';
             try {
+                  logger.info(`开始执行任务: ${taskName}`);
                   const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
 
                   // 查找超时订单及其订单项（一次性获取所有数据）
@@ -85,15 +94,23 @@ class OrderScheduleService {
                         }, { timeout: 10000 }); // 增加事务超时时间
                   }
 
+                  logger.info(`成功取消 ${unpaidOrders?.length || 0} 个超时未支付订单`);
                   console.log(`成功取消 ${unpaidOrders.length} 个超时未支付订单`);
+
+                  // 重置重试计数
+                  this.retryCount[taskName] = 0;
             } catch (error) {
-                  console.error('取消超时未支付订单失败:', error);
+                  logger.error(`任务执行失败: ${taskName}`, { error });
+                  // 实现重试逻辑
+                  this.handleTaskError(taskName, this.cancelUnpaidOrders.bind(this));
             }
       };
 
       // 处理已支付订单自动完成
       async completeOrders() {
+            const taskName = 'completeOrders';
             try {
+                  logger.info(`开始执行任务: ${taskName}`);
                   const twelveHoursAgo = new Date(Date.now() - 12 * 60 * 60 * 1000);
 
                   // 查找超过12小时已支付未完成的订单
@@ -128,21 +145,76 @@ class OrderScheduleService {
                   });
 
                   console.log(`成功完成 ${paidOrders.length} 个订单`);
+                  logger.info(`成功完成 ${paidOrders?.length || 0} 个订单`);
+                  // 重置重试计数
+                  this.retryCount[taskName] = 0;
+
             } catch (error) {
                   console.error('自动完成订单失败:', error);
+                  logger.error(`任务执行失败: ${taskName}`, { error });
+                  // 实现重试逻辑
+                  this.handleTaskError(taskName, this.completeOrders.bind(this));
+            }
+      };
+
+      // 错误处理与重试机制
+      private handleTaskError(taskName: string, taskFn: () => Promise<void>) {
+            if (!this.retryCount[taskName]) {
+                  this.retryCount[taskName] = 0;
+            }
+
+            if (this.retryCount[taskName] < this.maxRetries) {
+                  this.retryCount[taskName]++;
+                  const delay = this.retryCount[taskName] * 30000; // 30秒、60秒、90秒递增重试
+                  logger.info(`计划任务 ${taskName} 重试 ${this.retryCount[taskName]}/${this.maxRetries}, 延迟 ${delay / 1000} 秒`);
+
+                  setTimeout(() => {
+                        taskFn().catch(err => {
+                              logger.error(`任务重试失败: ${taskName}`, { error: err });
+                        });
+                  }, delay);
+            } else {
+                  logger.error(`任务 ${taskName} 达到最大重试次数 ${this.maxRetries}, 放弃执行`);
+                  // 可以在这里发送告警通知
+                  this.retryCount[taskName] = 0;
             }
       };
 
       // 启动定时任务
       startScheduleTasks() {
-            // 每分钟检查一次超时未支付订单
-            setInterval(() => this.cancelUnpaidOrders(), 60 * 1000);
+            // 使用cron表达式替代setInterval
+            // 每分钟执行一次取消超时订单任务
+            this.taskRegistry.cancelUnpaid = cron.schedule('* * * * *', () => {
+                  this.cancelUnpaidOrders().catch(error => {
+                        logger.error('取消超时订单任务异常', { error });
+                  });
+            });
 
-            // 每5分钟检查一次需要自动完成的订单
-            setInterval(() => this.completeOrders(), 5 * 60 * 1000);
+            // 每5分钟执行一次自动完成订单任务
+            this.taskRegistry.autoComplete = cron.schedule('*/5 * * * *', () => {
+                  this.completeOrders().catch(error => {
+                        logger.error('自动完成订单任务异常', { error });
+                  });
+            });
 
-            console.log('✅ 订单定时任务已启动');
+            // 每天凌晨3点执行库存审计任务
+            this.taskRegistry.inventoryAudit = cron.schedule('0 3 * * *', () => {
+                  logger.info('开始执行库存审计任务');
+                  inventoryService.auditInventory().catch(error => {
+                        logger.error('库存审计任务异常', { error });
+                  });
+            });
+
+            logger.info('✅ 所有订单定时任务已启动');
       };
+
+      // 停止所有任务
+      stopAllTasks() {
+            Object.values(this.taskRegistry).forEach(task => task.stop());
+            logger.info('所有定时任务已停止');
+      };
+
+
 }
 
 export const orderScheduleService = new OrderScheduleService();

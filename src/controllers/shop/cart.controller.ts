@@ -25,7 +25,7 @@ export const cartController = {
             }
 
             // 设置短暂的节流时间 - 300ms
-            await redisClient.setEx(throttleKey, 1, '1');
+            await redisClient.setEx(throttleKey, 3, '1');
 
             try {
                   // 单次查询获取所有必要数据

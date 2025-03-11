@@ -47,7 +47,7 @@ export const cacheUtils = {
             return memCached;
         }
         memoryCacheMisses++;
-        
+
         // 2. 查询Redis缓存
         const redisCached = await redisClient.get(key);
         if (redisCached) {
@@ -58,15 +58,15 @@ export const cacheUtils = {
             return parsed;
         }
         redisCacheMisses++;
-        
+
         // 3. 执行回调生成数据
         const data = await callback();
-        
+
         // 4. 同时写入两级缓存
         const jsonData = JSON.stringify(data);
         await redisClient.setEx(key, ttl, jsonData);
         memoryCache.set(key, data, Math.min(ttl / 2, 300));
-        
+
         return data;
     },
 
@@ -81,7 +81,7 @@ export const cacheUtils = {
         const baseTime = CACHE_LEVELS[baseLevel];
         const multipliers = { low: 2, medium: 1, high: 0.5 };
         const adaptedTime = Math.floor(baseTime * multipliers[traffic]);
-        
+
         return this.multiLevelCache(key, callback, adaptedTime);
     },
 
@@ -98,16 +98,16 @@ export const cacheUtils = {
     // 针对性清除缓存
     async invalidateCache(pattern: string) {
         const keys = await redisClient.keys(pattern);
-        
+
         // 清除Redis缓存
         if (keys.length > 0) {
             await redisClient.del(keys);
         }
-        
+
         // 清除内存缓存
         const memKeys = memoryCache.keys().filter(k => k.includes(pattern.replace('*', '')));
         memKeys.forEach(k => memoryCache.del(k));
-        
+
         return keys.length + memKeys.length;
     },
 
@@ -141,7 +141,7 @@ export const cacheUtils = {
     getCacheStats() {
         const memoryTotal = memoryCacheHits + memoryCacheMisses;
         const redisTotal = redisCacheHits + redisCacheMisses;
-        
+
         return {
             memory: {
                 hits: memoryCacheHits,
@@ -154,6 +154,71 @@ export const cacheUtils = {
                 hitRate: redisTotal > 0 ? (redisCacheHits / redisTotal) * 100 : 0
             }
         };
+    },
+
+    // 添加按模块清除缓存的方法
+    async invalidateModuleCache(module: 'product' | 'order' | 'cart' | 'user' | 'promotion', id?: string | number): Promise<number> {
+        const patterns: string[] = [];
+
+        switch (module) {
+            case 'product':
+                patterns.push(`product:*`);
+                if (id) {
+                    patterns.push(`product:${id}:*`);
+                    // 商品详情，SKU信息等
+                    patterns.push(`product:${id}:basic`);
+                    patterns.push(`product:${id}:skus`);
+                    // 影响分类商品列表
+                    patterns.push(`shop:products:category:*`);
+                }
+                // 各类商品列表缓存
+                patterns.push(`shop:products:latest:*`);
+                patterns.push(`shop:products:top-selling:*`);
+                patterns.push(`shop:products:promotion:*`);
+                patterns.push(`shop:home:data`);
+                break;
+
+            case 'order':
+                if (id) {
+                    patterns.push(`order:${id}:*`);
+                    patterns.push(`orders:*:${id}:*`);
+                }
+                // 用户订单列表
+                patterns.push(`orders:*`);
+                break;
+
+            case 'cart':
+                if (id) {
+                    patterns.push(`cart:${id}:*`);
+                } else {
+                    patterns.push(`cart:*`);
+                }
+                break;
+
+            case 'user':
+                if (id) {
+                    patterns.push(`user:${id}:*`);
+                    // 用户相关缓存
+                    patterns.push(`cart:${id}:*`);
+                    patterns.push(`orders:${id}:*`);
+                    patterns.push(`favorites:${id}:*`);
+                }
+                break;
+
+            case 'promotion':
+                patterns.push(`promotion:*`);
+                // 影响首页和促销商品列表
+                patterns.push(`shop:products:promotion:*`);
+                patterns.push(`shop:home:data`);
+                break;
+
+            default:
+                return 0;
+        }
+
+        // 批量清除缓存
+        const cleared = await this.invalidateMany(patterns);
+        return cleared.reduce((sum, count) => sum + count, 0);
     },
 
     // 重置统计数据
