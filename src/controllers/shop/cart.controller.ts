@@ -126,6 +126,9 @@ export const cartController = {
                         return res.sendSuccess(responseData, '已加入购物车，但库存不足');
                   }
 
+                  // 操作成功后清除用户购物车缓存
+                  await cacheUtils.invalidateModuleCache('cart', userId);
+
                   res.sendSuccess(responseData, '商品已成功添加到购物车');
             } catch (error) {
                   if (error instanceof AppError) throw error;
@@ -216,6 +219,13 @@ export const cartController = {
       // 优化后的购物车列表查询
       getCartList: asyncHandler(async (req: Request, res: Response) => {
             const userId = req.shopUser?.id;
+            // 添加限流控制
+            const rateKey = `rate:cart:${userId}`;
+            const allowed = await cacheUtils.rateLimit(rateKey, 10, 60); // 每分钟10次
+            if (!allowed) {
+                  throw new AppError(429, 'fail', '请求过于频繁，请稍后再试');
+            } 
+            
             const { page = '1', limit = '10' } = req.query;
             const pageNumber = parseInt(page as string);
             const limitNumber = parseInt(limit as string);
@@ -241,7 +251,7 @@ export const cartController = {
                                     skuId: true,
                                     quantity: true,
                                     updatedAt: true,
-                                    userId: true 
+                                    userId: true
                               },
                               orderBy: { updatedAt: 'desc' },
                               skip,

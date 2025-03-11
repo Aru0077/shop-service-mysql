@@ -3,6 +3,7 @@ import { Request, Response } from 'express';
 import { prisma } from '../../config';
 import { asyncHandler } from '../../utils/http.utils';
 import { AppError } from '../../utils/http.utils';
+import { cacheUtils, CACHE_LEVELS } from '../../utils/cache.utils';
 
 export const addressController = {
       // 新增收货地址
@@ -48,6 +49,8 @@ export const addressController = {
                   }
             });
 
+            await cacheUtils.invalidateModuleCache('user', userId);
+            
             res.sendSuccess(address, '收货地址添加成功');
       }),
 
@@ -152,14 +155,17 @@ export const addressController = {
                   throw new AppError(401, 'fail', '请先登录');
             }
 
-            // 查询用户的所有地址
-            const addresses = await prisma.userAddress.findMany({
-                  where: { userId },
-                  orderBy: [
-                        { isDefault: 'desc' }, // 默认地址排在前面
-                        { updatedAt: 'desc' }  // 最近修改的排在前面
-                  ]
-            });
+            // 添加缓存
+            const cacheKey = `user:${userId}:addresses`;
+            const addresses = await cacheUtils.multiLevelCache(cacheKey, async () => {
+                  return await prisma.userAddress.findMany({
+                        where: { userId },
+                        orderBy: [
+                              { isDefault: 'desc' },
+                              { updatedAt: 'desc' }
+                        ]
+                  });
+            }, CACHE_LEVELS.SHORT); // 5分钟缓存
 
             res.sendSuccess(addresses);
       }),

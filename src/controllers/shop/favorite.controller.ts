@@ -4,6 +4,7 @@ import { prisma } from '../../config';
 import { asyncHandler } from '../../utils/http.utils';
 import { AppError } from '../../utils/http.utils';
 import { ProductStatus } from '@prisma/client';
+import { cacheUtils } from '../../utils/cache.utils';
 
 export const favoriteController = {
       // 收藏商品
@@ -48,6 +49,10 @@ export const favoriteController = {
                         productId
                   }
             });
+
+            // 清除相关缓存
+            await cacheUtils.invalidateModuleCache('user', userId);
+            await cacheUtils.invalidateCache(`favorites:${userId}:*`);
 
             res.sendSuccess(null, '收藏成功');
       }),
@@ -113,6 +118,7 @@ export const favoriteController = {
       }),
 
       // 分页获取收藏商品列表
+      // 分页获取收藏商品列表
       getFavorites: asyncHandler(async (req: Request, res: Response) => {
             const userId = req.shopUser?.id;
             const { page = '1', limit = '10', idsOnly = 'false' } = req.query;
@@ -125,78 +131,105 @@ export const favoriteController = {
                   throw new AppError(401, 'fail', '请先登录');
             }
 
-            // 如果只需要ID列表，则直接查询ID（不分页）
-            if (getIdsOnly) {
-                  const favorites = await prisma.userFavorite.findMany({
-                        where: { userId },
-                        select: { productId: true }
-                  });
+            // 使用缓存，针对不同查询模式使用不同的缓存键
+            const cacheKey = `favorites:${userId}:${getIdsOnly ? 'ids' : 'list'}:${pageNumber}:${limitNumber}`;
 
-                  return res.sendSuccess({
-                        total: favorites.length,
-                        data: favorites.map(item => item.productId)
-                  });
-            }
+            // 使用自适应缓存策略，收藏列表更新频率中等
+            const favoriteData = await cacheUtils.adaptiveCaching(
+                  cacheKey,
+                  async () => {
+                        // 如果只需要ID列表，则直接查询ID（不分页）
+                        if (getIdsOnly) {
+                              const favorites = await prisma.userFavorite.findMany({
+                                    where: { userId },
+                                    select: { productId: true }
+                              });
 
-            // 查询收藏商品总数
-            const total = await prisma.userFavorite.count({
-                  where: {
-                        userId,
-                        product: {
-                              status: ProductStatus.ONLINE
+                              return {
+                                    total: favorites.length,
+                                    data: favorites.map(item => item.productId)
+                              };
                         }
-                  }
-            });
 
-            // 查询收藏商品列表
-            const favorites = await prisma.userFavorite.findMany({
-                  where: {
-                        userId,
-                        product: {
-                              status: ProductStatus.ONLINE
-                        }
-                  },
-                  include: {
-                        product: {
-                              include: {
-                                    category: {
-                                          select: {
-                                                id: true,
-                                                name: true
-                                          }
-                                    },
-                                    skus: {
-                                          select: {
-                                                id: true,
-                                                price: true,
-                                                promotion_price: true,
-                                                stock: true
-                                          },
-                                          take: 1,
-                                          orderBy: {
-                                                price: 'asc'
-                                          }
+                        // 查询收藏商品总数
+                        const total = await prisma.userFavorite.count({
+                              where: {
+                                    userId,
+                                    product: {
+                                          status: ProductStatus.ONLINE
                                     }
                               }
-                        }
-                  },
-                  orderBy: {
-                        createdAt: 'desc'
-                  },
-                  skip,
-                  take: limitNumber
-            });
+                        });
 
-            // 过滤掉已下架或删除的商品
-            const validFavorites = favorites.filter(
-                  favorite => favorite.product && favorite.product.status === ProductStatus.ONLINE
+                        // 查询收藏商品列表
+                        const favorites = await prisma.userFavorite.findMany({
+                              where: {
+                                    userId,
+                                    product: {
+                                          status: ProductStatus.ONLINE
+                                    }
+                              },
+                              include: {
+                                    product: {
+                                          include: {
+                                                category: {
+                                                      select: {
+                                                            id: true,
+                                                            name: true
+                                                      }
+                                                },
+                                                skus: {
+                                                      select: {
+                                                            id: true,
+                                                            price: true,
+                                                            promotion_price: true,
+                                                            stock: true
+                                                      },
+                                                      take: 1,
+                                                      orderBy: {
+                                                            price: 'asc'
+                                                      }
+                                                }
+                                          }
+                                    }
+                              },
+                              orderBy: {
+                                    createdAt: 'desc'
+                              },
+                              skip,
+                              take: limitNumber
+                        });
+
+                        // 过滤掉已下架或删除的商品
+                        const validFavorites = favorites.filter(
+                              favorite => favorite.product && favorite.product.status === ProductStatus.ONLINE
+                        );
+
+                        // 增强返回数据，添加计算字段
+                        const enhancedFavorites = validFavorites.map(favorite => {
+                              const sku = favorite.product.skus[0];
+                              const displayPrice = sku?.promotion_price || sku?.price || 0;
+
+                              return {
+                                    ...favorite,
+                                    product: {
+                                          ...favorite.product,
+                                          displayPrice
+                                    }
+                              };
+                        });
+
+                        return {
+                              total,
+                              page: pageNumber,
+                              limit: limitNumber,
+                              data: enhancedFavorites
+                        };
+                  },
+                  'SHORT',  // 基础缓存级别(5分钟)
+                  'medium'  // 流量级别
             );
 
-            res.sendSuccess({
-                  total,
-                  page: pageNumber,
-                  limit: limitNumber,
-                  data: validFavorites
-            });
-      })
+            res.sendSuccess(favoriteData);
+      }),
 };
