@@ -656,6 +656,87 @@ export const productController = {
 
             res.sendSuccess(searchResults);
       }),
+
+      // 获取完整商品详情（包含SKU信息）
+      getProductFullDetail: asyncHandler(async (req: Request, res: Response) => {
+            const { id } = req.params;
+            const productId = Number(id);
+
+            // 使用组合缓存键
+            const fullDetailCacheKey = `shop:product:full:${productId}`;
+            const productFullDetail = await cacheUtils.multiLevelCache(fullDetailCacheKey, async () => {
+                  // 同时查询商品基本信息和SKU信息
+                  const product = await prisma.product.findUnique({
+                        where: {
+                              id: productId,
+                              status: ProductStatus.ONLINE
+                        },
+                        select: {
+                              id: true,
+                              name: true,
+                              content: true,
+                              mainImage: true,
+                              detailImages: true,
+                              is_promotion: true,
+                              categoryId: true,
+                              category: {
+                                    select: {
+                                          id: true,
+                                          name: true
+                                    }
+                              },
+                              // 内联获取SKU信息
+                              skus: {
+                                    include: {
+                                          sku_specs: {
+                                                include: {
+                                                      spec: true,
+                                                      specValue: true
+                                                }
+                                          }
+                                    }
+                              }
+                        }
+                  });
+
+                  if (!product) {
+                        throw new AppError(404, 'fail', '商品不存在或已下架');
+                  }
+
+                  // 获取规格矩阵
+                  const specs = await prisma.spec.findMany({
+                        where: {
+                              skuSpecs: {
+                                    some: {
+                                          skus: { productId }
+                                    }
+                              }
+                        },
+                        include: {
+                              values: {
+                                    where: {
+                                          skuSpecs: {
+                                                some: {
+                                                      skus: { productId }
+                                                }
+                                          }
+                                    }
+                              }
+                        }
+                  });
+
+                  // 构建有效规格组合映射
+                  const validSpecCombinations = buildSpecCombinationsMap(product.skus);
+
+                  return {
+                        ...product,
+                        specs,
+                        validSpecCombinations
+                  };
+            }, CACHE_LEVELS.SHORT); // 使用5分钟缓存
+
+            res.sendSuccess(productFullDetail);
+      }),
 };
 
 

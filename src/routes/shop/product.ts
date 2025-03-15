@@ -61,10 +61,15 @@ router.get(
 
 // 获取商品SKU信息
 router.get(
-      '/:id/skus', 
-      validateRequest(productDetailSchema), 
+      '/:id/skus',
+      validateRequest(productDetailSchema),
       productController.getProductSkus
 );
 
+router.get(
+      '/:id/full',
+      validateRequest(productDetailSchema),
+      productController.getProductFullDetail
+);
 
 export default router;
