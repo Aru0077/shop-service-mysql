@@ -8,6 +8,7 @@ import cartRoutes from './cart';
 import orderRoutes from './order';
 import promotionRoutes from './promotion';
 import checkoutRoutes from './checkout';
+import tempOrderRoutes from './temp-order';
 
 const router = Router();
 
@@ -34,5 +35,8 @@ router.use('/promotions', promotionRoutes);
 
 // 结算相关路由
 router.use('/checkout', checkoutRoutes);
+
+// 临时订单相关路由
+router.use('/temp-order', tempOrderRoutes);
 
 export default router;

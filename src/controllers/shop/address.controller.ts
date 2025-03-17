@@ -50,7 +50,7 @@ export const addressController = {
             });
 
             await cacheUtils.invalidateModuleCache('user', userId);
-            
+
             res.sendSuccess(address, '收货地址添加成功');
       }),
 
@@ -98,6 +98,8 @@ export const addressController = {
                         isDefault
                   }
             });
+            // 清除用户相关缓存
+            await cacheUtils.invalidateModuleCache('user', userId);
 
             res.sendSuccess(updatedAddress, '收货地址更新成功');
       }),
@@ -143,6 +145,9 @@ export const addressController = {
                         });
                   }
             }
+
+            // 清除用户相关缓存
+            await cacheUtils.invalidateModuleCache('user', userId);
 
             res.sendSuccess(null, '收货地址删除成功');
       }),
@@ -216,6 +221,9 @@ export const addressController = {
                   where: { id: addressId }
             });
 
+            // 清除用户相关缓存
+            await cacheUtils.invalidateModuleCache('user', userId);
+            
             res.sendSuccess(updatedAddress, '默认地址设置成功');
       })
 };

@@ -91,7 +91,7 @@ export const favoriteController = {
                         }
                   }
             });
-
+            await cacheUtils.invalidateCache(`favorites:${userId}:*`);
             res.sendSuccess(null, '取消收藏成功');
       }),
 
@@ -113,7 +113,7 @@ export const favoriteController = {
                         }
                   }
             });
-
+            await cacheUtils.invalidateCache(`favorites:${userId}:*`);
             res.sendSuccess(null, '批量取消收藏成功');
       }),
 
@@ -126,6 +126,10 @@ export const favoriteController = {
             const limitNumber = Number(limit);
             const skip = (pageNumber - 1) * limitNumber;
             const getIdsOnly = idsOnly === 'true';
+
+            console.log('查询参数:', req.query);
+            console.log('idsOnly 值:', idsOnly, '类型:', typeof idsOnly);
+            console.log('getIdsOnly 解析结果:', getIdsOnly);
 
             if (!userId) {
                   throw new AppError(401, 'fail', '请先登录');
