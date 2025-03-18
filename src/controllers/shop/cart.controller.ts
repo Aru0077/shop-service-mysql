@@ -24,7 +24,7 @@ export const cartController = {
                   return res.sendSuccess(null, '商品已添加到购物车');
             }
 
-            // 设置短暂的节流时间 - 300ms
+            // 设置短暂的节流时间 - 3秒
             await redisClient.setEx(throttleKey, 3, '1');
 
             try {
