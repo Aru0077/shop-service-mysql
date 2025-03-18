@@ -8,6 +8,8 @@ import { orderService } from './order.service';
 import NodeCache from 'node-cache';
 import { StockChangeType } from '../constants/stock.constants';
 import { cacheUtils } from '../utils/cache.utils';
+import { inventoryService } from './inventory.service';
+import { orderQueue } from '../queues/order.queue';
 
 // 内存缓存，提高频繁访问的临时订单读取性能
 const memoryCache = new NodeCache({ stdTTL: 60, checkperiod: 30 });
@@ -477,7 +479,7 @@ export const tempOrderService = {
                     });
                 }
                 
-                // 3. 锁定商品库存
+                // 3. 锁定商品库存 - 修正：使用inventoryService统一处理库存
                 for (const item of tempOrder.items) {
                     // 获取当前库存
                     const sku = await tx.sku.findUnique({
@@ -488,27 +490,17 @@ export const tempOrderService = {
                         throw new AppError(400, 'fail', `商品"${item.productName}"库存不足`);
                     }
                     
-                    // 锁定库存
-                    await tx.sku.update({
-                        where: { id: item.skuId },
-                        data: {
-                            stock: { decrement: item.quantity },
-                            lockedStock: { increment: item.quantity }
-                        }
-                    });
+                    // 使用inventoryService锁定库存
+                    const success = await inventoryService.preOccupyInventory(
+                        item.skuId,
+                        item.quantity,
+                        orderNo,
+                        600
+                    );
                     
-                    // 记录库存变更日志
-                    await tx.stockLog.create({
-                        data: {
-                            skuId: item.skuId,
-                            changeQuantity: -item.quantity,
-                            currentStock: (sku.stock || 0) - item.quantity,
-                            type: StockChangeType.ORDER_LOCK,
-                            orderNo,
-                            remark: `订单${orderNo}锁定库存`,
-                            operator: 'system'
-                        }
-                    });
+                    if (!success) {
+                        throw new AppError(400, 'fail', `锁定商品"${item.productName}"库存失败`);
+                    }
                 }
                 
                 return order;
@@ -516,22 +508,17 @@ export const tempOrderService = {
             
             // 异步处理购物车清理（如果是购物车模式）
             if (tempOrder.mode === 'cart' && tempOrder.cartItemIds) {
-                setTimeout(async () => {
-                    try {
-                        // 清理购物车
-                        await prisma.userCartItem.deleteMany({
-                            where: {
-                                userId,
-                                id: { in: tempOrder.cartItemIds }
-                            }
-                        });
-                        
-                        // 清除购物车缓存
-                        await cacheUtils.invalidateModuleCache('cart', userId);
-                    } catch (error) {
-                        console.error('清理购物车失败:', error);
+                // 使用队列系统处理异步任务
+                await orderQueue.add('cleanupCart', {
+                    userId,
+                    cartItemIds: tempOrder.cartItemIds
+                }, {
+                    attempts: 3,
+                    backoff: {
+                        type: 'exponential',
+                        delay: 2000
                     }
-                }, 0);
+                });
             }
             
             // 删除临时订单
@@ -552,7 +539,7 @@ export const tempOrderService = {
                 promotion: tempOrder.promotion
             };
         } finally {
-            // 释放锁
+            // 确保在任何情况下都释放锁
             await redisClient.del(lockKey);
         }
     },

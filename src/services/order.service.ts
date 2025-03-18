@@ -885,7 +885,20 @@ class OrderService {
 
             // 设置锁续期定时器
             const lockExtender = setInterval(async () => {
-                  await redisClient.expire(lockKey, 30);
+                  try {
+                        // 检查锁是否仍然存在
+                        const exists = await redisClient.exists(lockKey);
+                        if (exists) {
+                              await redisClient.expire(lockKey, 30);
+                        } else {
+                              // 如果锁不存在了，清除定时器
+                              clearInterval(lockExtender);
+                        }
+                  } catch (error) {
+                        console.error('锁续期失败:', error);
+                        // 出错时也清除定时器
+                        clearInterval(lockExtender);
+                  }
             }, 10000); // 每10秒续期一次
 
             return { success: true, lockKey, lockExtender };
@@ -893,10 +906,18 @@ class OrderService {
 
       // 释放订单锁
       async releaseOrderLock(lockKey: string, lockExtender?: NodeJS.Timeout) {
-            if (lockExtender) {
-                  clearInterval(lockExtender);
+            try {
+                  if (lockExtender) {
+                        clearInterval(lockExtender);
+                  }
+                  await redisClient.del(lockKey);
+            } catch (error) {
+                  console.error('释放锁失败:', error);
+                  // 确保定时器被清理
+                  if (lockExtender) {
+                        clearInterval(lockExtender);
+                  }
             }
-            await redisClient.del(lockKey);
       }
 
       // 获取分布式锁

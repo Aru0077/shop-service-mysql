@@ -71,11 +71,18 @@ class InventoryService {
                         return false;
                   }
 
-                  // 异步更新数据库库存
-                  await this.updateDatabaseStock(skuId, -quantity, StockChangeType.ORDER_LOCK, orderNo);
+                  // 修改：等待数据库操作完成后再返回结果
+                  try {
+                        await this.updateDatabaseStock(skuId, -quantity, StockChangeType.ORDER_LOCK, orderNo);
+                        return true;
+                  } catch (dbError) {
+                        // 数据库操作失败，回滚Redis中的库存
+                        console.error('数据库更新库存失败，正在回滚Redis库存:', dbError);
+                        await redisClient.incrBy(skuStockKey, quantity);
+                        await redisClient.del(releaseKey);
+                        return false;
+                  }
 
-
-                  return true;
             } catch (error) {
                   console.error('库存预占失败:', error);
                   return false;
