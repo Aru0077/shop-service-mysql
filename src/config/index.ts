@@ -13,7 +13,7 @@ const prisma = new PrismaClient({
         db: {
             url: process.env.DATABASE_URL,
         }
-    }
+    },
 });
 
 // 创建 Redis 客户端，添加更多的连接配置

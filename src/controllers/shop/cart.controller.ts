@@ -106,25 +106,53 @@ export const cartController = {
                         return { cartItem, cartItemCount };
                   });
 
-                  // 构建响应数据
+                  const completeCartItem = await prisma.userCartItem.findUnique({
+                        where: { id: result.cartItem.id },
+                        include: {
+                              product: {
+                                    select: {
+                                          id: true,
+                                          name: true,
+                                          mainImage: true,
+                                          productCode: true,
+                                          status: true,
+                                          is_promotion: true,
+                                          categoryId: true,
+                                          category: {
+                                                select: {
+                                                      id: true,
+                                                      name: true
+                                                }
+                                          }
+                                    }
+                              }
+                        }
+                  });
+
+                  // 获取完整的SKU信息
+                  const completeSkuInfo = await prisma.sku.findUnique({
+                        where: { id: result.cartItem.skuId },
+                        include: {
+                              sku_specs: {
+                                    include: {
+                                          spec: true,
+                                          specValue: true
+                                    }
+                              }
+                        }
+                  });
+
+                  // 构建完整的响应数据
                   const responseData = {
                         cartItem: {
                               ...result.cartItem,
-                              product: { id: product.id, name: product.name },
-                              sku: {
-                                    id: sku.id,
-                                    price: sku.promotion_price || sku.price,
-                                    stock: sku.stock
-                              }
+                              product: completeCartItem?.product,
+                              sku: completeSkuInfo
                         },
                         cartItemCount: result.cartItemCount,
                         isLowStock
                   };
 
-                  // 返回适当的提示
-                  if (isLowStock) {
-                        return res.sendSuccess(responseData, '已加入购物车，但库存不足');
-                  }
 
                   // 操作成功后清除用户购物车缓存
                   await cacheUtils.invalidateModuleCache('cart', userId);
@@ -182,7 +210,48 @@ export const cartController = {
                   data: { quantity }
             });
 
-            res.sendSuccess(updatedCartItem, '购物车已更新');
+            // 查询完整的购物车项信息
+            const completeCartItem = await prisma.userCartItem.findUnique({
+                  where: { id: updatedCartItem.id },
+                  include: {
+                        product: {
+                              select: {
+                                    id: true,
+                                    name: true,
+                                    mainImage: true,
+                                    status: true,
+                                    categoryId: true,
+                                    category: true
+                              }
+                        }
+                  }
+            });
+
+            // 获取完整的SKU信息
+            const completeSkuInfo = await prisma.sku.findUnique({
+                  where: { id: updatedCartItem.skuId },
+                  include: {
+                        sku_specs: {
+                              include: {
+                                    spec: true,
+                                    specValue: true
+                              }
+                        }
+                  }
+            });
+
+            // 构建完整的响应数据
+            const responseData = {
+                  ...updatedCartItem,
+                  product: completeCartItem?.product,
+                  sku: completeSkuInfo
+            };
+
+
+            // 清除缓存
+            await cacheUtils.invalidateModuleCache('cart', req.shopUser?.id);
+
+            res.sendSuccess(responseData, '购物车已更新');
       }),
 
       // 删除购物车商品
@@ -224,8 +293,8 @@ export const cartController = {
             const allowed = await cacheUtils.rateLimit(rateKey, 10, 60); // 每分钟10次
             if (!allowed) {
                   throw new AppError(429, 'fail', '请求过于频繁，请稍后再试');
-            } 
-            
+            }
+
             const { page = '1', limit = '10' } = req.query;
             const pageNumber = parseInt(page as string);
             const limitNumber = parseInt(limit as string);

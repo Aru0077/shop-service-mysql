@@ -90,16 +90,27 @@ export const orderController = {
                   // 异步处理库存锁定和购物车清理
                   await orderService.processInventoryAndCart(orderId, orderNo, cartItems, skuMap, cartItemIds);
 
-                  // 返回订单信息
-                  res.sendSuccess({
-                        id: orderId,
-                        orderNo,
-                        totalAmount: orderData.totalAmount,
-                        discountAmount,
-                        paymentAmount,
-                        orderStatus: OrderStatus.PENDING_PAYMENT,
-                        paymentStatus: PaymentStatus.UNPAID,
-                        createdAt: new Date(),
+                  // 查询完整的订单信息
+                  const completeOrder = await prisma.order.findUnique({
+                        where: { id: orderId },
+                        include: {
+                              orderItems: true,
+                              promotion: true
+                        }
+                  });
+
+                  // 构建完整的响应数据
+                  const responseData = {
+                        id: completeOrder?.id,
+                        orderNo: completeOrder?.orderNo,
+                        totalAmount: completeOrder?.totalAmount,
+                        discountAmount: completeOrder?.discountAmount,
+                        paymentAmount: completeOrder?.paymentAmount,
+                        orderStatus: completeOrder?.orderStatus,
+                        paymentStatus: completeOrder?.paymentStatus,
+                        shippingAddress: completeOrder?.shippingAddress,
+                        createdAt: completeOrder?.createdAt,
+                        orderItems: completeOrder?.orderItems,
                         timeoutSeconds: 600,
                         promotion: promotion ? {
                               id: promotion.id,
@@ -107,7 +118,10 @@ export const orderController = {
                               type: promotion.type,
                               discountAmount: promotion.discountAmount
                         } : null
-                  }, '订单创建成功，请在10分钟内完成支付');
+                  };
+
+                  // 返回订单信息
+                  res.sendSuccess(responseData, '订单创建成功，请在10分钟内完成支付');
             } catch (error) {
                   // 发生错误时自动回滚
                   // await orderService.handleOrderError(orderId, orderNo, error);
@@ -137,7 +151,22 @@ export const orderController = {
                   remark
             );
 
-            res.sendSuccess(result, '订单创建成功，请在10分钟内完成支付');
+            // 获取完整订单信息
+            const completeOrder = await prisma.order.findUnique({
+                  where: { id: result.id },
+                  include: {
+                        orderItems: true,
+                        promotion: true
+                  }
+            });
+
+            // 构建完整的响应数据
+            const responseData = {
+                  ...result,
+                  orderItems: completeOrder?.orderItems
+            };
+
+            res.sendSuccess(responseData, '订单创建成功，请在10分钟内完成支付');
       }),
 
       // 获取订单列表 - 使用缓存和数据库优化
@@ -228,7 +257,32 @@ export const orderController = {
                   // 设置幂等键
                   await redisClient.setEx(paymentKey, 86400, '1'); // 24小时有效期
 
-                  res.sendSuccess(paymentResult, '订单支付成功');
+                  // 获取完整的支付后订单信息
+                  const completeOrder = await prisma.order.findUnique({
+                        where: { id: paymentResult.orderId },
+                        include: {
+                              orderItems: true,
+                              paymentLogs: {
+                                    orderBy: {
+                                          createdAt: 'desc'
+                                    },
+                                    take: 1
+                              },
+                              promotion: true
+                        }
+                  });
+
+                  // 构建完整的响应数据
+                  const responseData = {
+                        ...paymentResult,
+                        totalAmount: completeOrder?.totalAmount,
+                        paymentAmount: completeOrder?.paymentAmount,
+                        orderItems: completeOrder?.orderItems,
+                        paymentLogs: completeOrder?.paymentLogs,
+                        shippingAddress: completeOrder?.shippingAddress
+                  };
+
+                  res.sendSuccess(responseData, '订单支付成功');
             } finally {
                   // 释放锁
                   await orderService.releaseDistributedLock(lockKey);

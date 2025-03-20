@@ -43,10 +43,39 @@ export const favoriteController = {
             }
 
             // 添加收藏
-            await prisma.userFavorite.create({
+            const favorite = await prisma.userFavorite.create({
                   data: {
                         userId,
                         productId
+                  }
+            });
+
+            // 查询完整的收藏信息
+            const completeFavorite = await prisma.userFavorite.findUnique({
+                  where: { id: favorite.id },
+                  include: {
+                        product: {
+                              include: {
+                                    category: {
+                                          select: {
+                                                id: true,
+                                                name: true
+                                          }
+                                    },
+                                    skus: {
+                                          select: {
+                                                id: true,
+                                                price: true,
+                                                promotion_price: true,
+                                                stock: true
+                                          },
+                                          take: 1,
+                                          orderBy: {
+                                                price: 'asc'
+                                          }
+                                    }
+                              }
+                        }
                   }
             });
 
@@ -54,7 +83,7 @@ export const favoriteController = {
             await cacheUtils.invalidateModuleCache('user', userId);
             await cacheUtils.invalidateCache(`favorites:${userId}:*`);
 
-            res.sendSuccess(null, '收藏成功');
+            res.sendSuccess(completeFavorite, '收藏成功');
       }),
 
       // 取消收藏商品
