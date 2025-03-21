@@ -5,6 +5,7 @@ import { OrderStatus, PaymentStatus } from '../constants/orderStatus.enum';
 import { StockChangeType } from '../constants/stock.constants';
 import { logger } from '../utils/logger';
 import { inventoryService } from './inventory.service';
+import { qpayService } from './qpay.service'; 
 
 class OrderScheduleService {
       private taskRegistry: Record<string, cron.ScheduledTask> = {};
@@ -188,7 +189,7 @@ class OrderScheduleService {
                   const now = new Date();
 
                   // 查找过期发票
-                  const expiredInvoices = await prisma.qpayInvoice.findMany({
+                  const expiredInvoices = await prisma.qPayInvoice.findMany({
                         where: {
                               status: 'PENDING',
                               expiresAt: { lt: now }
@@ -208,7 +209,7 @@ class OrderScheduleService {
                               await qpayService.cancelInvoice(invoice.invoiceId);
 
                               // 更新发票状态
-                              await prisma.qpayInvoice.update({
+                              await prisma.qPayInvoice.update({
                                     where: { id: invoice.id },
                                     data: { status: 'EXPIRED' }
                               });

@@ -33,7 +33,7 @@ export const qpayController = {
             }
 
             // 检查订单是否已经有QPay发票
-            const existingInvoice = await prisma.qpayInvoice.findFirst({
+            const existingInvoice = await prisma.qPayInvoice.findFirst({
                   where: {
                         orderId,
                         status: { notIn: ['CANCELLED', 'EXPIRED'] }
@@ -87,7 +87,7 @@ export const qpayController = {
             }
 
             // 保存发票信息
-            await prisma.qpayInvoice.create({
+            await prisma.qPayInvoice.create({
                   data: {
                         orderId,
                         invoiceId: invoice.invoice_id,
@@ -142,7 +142,7 @@ export const qpayController = {
             }
 
             // 获取QPay发票信息
-            const invoice = await prisma.qpayInvoice.findFirst({
+            const invoice = await prisma.qPayInvoice.findFirst({
                   where: {
                         orderId
                   },
@@ -182,7 +182,7 @@ export const qpayController = {
                         );
 
                         // 更新发票状态
-                        await prisma.qpayInvoice.update({
+                        await prisma.qPayInvoice.update({
                               where: { id: invoice.id },
                               data: { status: 'PAID', paymentId: paymentStatus.payment_id }
                         });
@@ -236,7 +236,7 @@ export const qpayController = {
             }
 
             // 记录回调数据
-            await prisma.qpayCallback.create({
+            await prisma.qPayCallback.create({
                   data: {
                         orderId: orderId as string,
                         paymentId: payment_id as string || null,
@@ -261,13 +261,13 @@ export const qpayController = {
                               );
 
                               // 更新发票状态
-                              await prisma.qpayInvoice.updateMany({
+                              await prisma.qPayInvoice.updateMany({
                                     where: { orderId: orderId as string },
                                     data: { status: 'PAID', paymentId: payment_id as string }
                               });
 
                               // 更新回调状态
-                              await prisma.qpayCallback.update({
+                              await prisma.qPayCallback.update({
                                     where: { id: orderId as string },
                                     data: { status: 'PROCESSED' }
                               });
@@ -278,7 +278,7 @@ export const qpayController = {
                         logger.error('处理QPay回调失败', { error, orderId, payment_id });
 
                         // 更新回调状态
-                        await prisma.qpayCallback.update({
+                        await prisma.qPayCallback.update({
                               where: { id: orderId as string },
                               data: { status: 'FAILED', error: JSON.stringify(error) }
                         });
