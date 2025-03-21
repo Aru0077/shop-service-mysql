@@ -9,6 +9,7 @@ import orderRoutes from './order';
 import promotionRoutes from './promotion';
 import checkoutRoutes from './checkout';
 import tempOrderRoutes from './temp-order';
+import qpayRoutes from './qpay';
 
 const router = Router();
 
@@ -38,5 +39,10 @@ router.use('/checkout', checkoutRoutes);
 
 // 临时订单相关路由
 router.use('/temp-order', tempOrderRoutes);
+
+// QPay支付相关路由
+router.use('/qpay', qpayRoutes);
+
+
 
 export default router;

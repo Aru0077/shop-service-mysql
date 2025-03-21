@@ -3,13 +3,54 @@ generator client {
 }
 
 datasource db {
-  provider = "mysql"
-  url      = env("DATABASE_URL")
+  provider     = "mysql"
+  url          = env("DATABASE_URL")
   relationMode = "prisma"
 }
 
+// QPay发票模型
+model QPayInvoice {
+  id         String   @id @default(uuid())
+  orderId    String   @map("order_id")
+  invoiceId  String   @map("invoice_id")
+  qrImage    String   @map("qr_image")
+  qrText     String   @map("qr_text")
+  invoiceUrl String   @map("invoice_url")
+  deepLink   String?  @map("deep_link")
+  status     String   @default("PENDING") // PENDING, PAID, CANCELLED, EXPIRED
+  paymentId  String?  @map("payment_id")
+  expiresAt  DateTime @map("expires_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  // 关系
+  order Order @relation(fields: [orderId], references: [id])
+
+  @@index([orderId])
+  @@index([invoiceId])
+  @@map("qpay_invoices")
+}
+
+// QPay回调记录模型
+model QPayCallback {
+  id           String   @id @default(uuid())
+  orderId      String   @map("order_id")
+  paymentId    String?  @map("payment_id")
+  callbackData String   @map("callback_data") @db.Text
+  status       String   @default("RECEIVED") // RECEIVED, PROCESSED, FAILED
+  error        String?  @db.Text
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  // 关系
+  order Order @relation(fields: [orderId], references: [id])
+
+  @@index([orderId])
+  @@map("qpay_callbacks")
+}
+
 model AdminUser {
-  id            Int    @id @default(autoincrement())
+  id            Int       @id @default(autoincrement())
   username      String    @unique(map: "idx_username") @db.VarChar(50)
   password      String    @db.VarChar(255)
   status        Int       @default(1) @db.TinyInt
@@ -56,7 +97,7 @@ model Product {
   name         String         @db.VarChar(200)
   content      String?        @db.Text
   mainImage    String?        @map("main_image") @db.VarChar(255)
-  detailImages Json?         @map("detail_images") @db.Json 
+  detailImages Json?          @map("detail_images") @db.Json
   is_promotion Int?           @default(0) @db.TinyInt
   status       ProductStatus? @default(DRAFT)
   productCode  String         @unique(map: "idx_product_code") @map("product_code") @db.VarChar(50)
@@ -71,11 +112,10 @@ model Product {
   @@index([name, status], map: "idx_name_status")
   @@index([is_promotion, status], map: "idx_promotion_status")
   @@index([categoryId, status], map: "idx_category_status")
-  @@index([name, productCode], map: "idx_name_code") 
+  @@index([name, productCode], map: "idx_name_code")
   @@index([name], map: "idx_product_name_search")
-  @@index([status, salesCount(sort: Desc)], map: "idx_status_sales") 
+  @@index([status, salesCount(sort: Desc)], map: "idx_status_sales")
   @@index([status, is_promotion], map: "idx_status_promotion")
-
   @@map("products")
 }
 
@@ -99,7 +139,6 @@ model Sku {
   @@index([price], map: "idx_price")
   @@index([promotion_price], map: "idx_promotion_price")
   @@index([stock], map: "idx_stock")
-
   @@map("skus")
 }
 
@@ -142,43 +181,44 @@ model Promotion {
   name            String   @db.VarChar(100)
   description     String?  @db.Text
   type            String   @db.VarChar(20) // AMOUNT_OFF 满减, PERCENT_OFF 折扣
-  thresholdAmount Int      // 满足条件的金额阈值
-  discountAmount  Int      // 优惠金额
+  thresholdAmount Int // 满足条件的金额阈值
+  discountAmount  Int // 优惠金额
   startTime       DateTime
   endTime         DateTime
   isActive        Boolean  @default(true)
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @default(now()) @updatedAt @map("updated_at")
-  
-  appliedOrders   Order[]  // 关联的订单
+
+  appliedOrders Order[] // 关联的订单
 
   @@map("promotions")
 }
 
 model Order {
-  id              String       @id @default(uuid()) @db.VarChar(36)
-  orderNo         String       @unique(map: "order_no") @map("order_no") @db.VarChar(32)
-  userId          String       @map("user_id") @db.VarChar(36)
-  orderStatus     Int?         @default(1) @map("order_status") @db.TinyInt
-  paymentStatus   Int?         @default(0) @map("payment_status") @db.TinyInt
-  shippingAddress Json         @map("shipping_address")
-  totalAmount     Int          @map("total_amount")
-  paymentAmount   Int          @map("payment_amount")
-  createdAt       DateTime     @default(now()) @map("created_at")
-  updatedAt       DateTime     @default(now()) @updatedAt @map("updated_at")
+  id              String         @id @default(uuid()) @db.VarChar(36)
+  orderNo         String         @unique(map: "order_no") @map("order_no") @db.VarChar(32)
+  userId          String         @map("user_id") @db.VarChar(36)
+  orderStatus     Int?           @default(1) @map("order_status") @db.TinyInt
+  paymentStatus   Int?           @default(0) @map("payment_status") @db.TinyInt
+  shippingAddress Json           @map("shipping_address")
+  totalAmount     Int            @map("total_amount")
+  paymentAmount   Int            @map("payment_amount")
+  createdAt       DateTime       @default(now()) @map("created_at")
+  updatedAt       DateTime       @default(now()) @updatedAt @map("updated_at")
   orderItems      OrderItem[]
-  user            User         @relation(fields: [userId], references: [id], onUpdate: Restrict, map: "orders_ibfk_1")
+  user            User           @relation(fields: [userId], references: [id], onUpdate: Restrict, map: "orders_ibfk_1")
   paymentLogs     PaymentLog[]
-  promotionId     Int?     @map("promotion_id")
-  discountAmount  Int      @default(0) @map("discount_amount") // 优惠金额
-  promotion       Promotion? @relation(fields: [promotionId], references: [id])
+  promotionId     Int?           @map("promotion_id")
+  discountAmount  Int            @default(0) @map("discount_amount") // 优惠金额
+  promotion       Promotion?     @relation(fields: [promotionId], references: [id])
+  qpayInvoices    QPayInvoice[]
+  qpayCallbacks   QPayCallback[]
 
   @@index([userId, orderStatus, createdAt(sort: Desc)], map: "idx_user_status_created")
   @@index([orderStatus, createdAt], map: "idx_status_created")
   @@index([createdAt], map: "idx_created")
   @@index([promotionId], map: "idx_promotion")
   @@index([paymentStatus, orderStatus], map: "idx_payment_order_status")
-  
   @@map("orders")
 }
 
@@ -227,12 +267,13 @@ model StockLog {
   operator       String?  @db.VarChar(50)
   createdAt      DateTime @default(now()) @map("created_at")
   sku            Sku      @relation(fields: [skuId], references: [id])
-  
+
+  @@index([skuId])
   @@map("stock_logs")
 }
 
 model UserAddress {
-   id            Int      @id @default(autoincrement())
+  id            Int      @id @default(autoincrement())
   userId        String   @map("user_id") @db.VarChar(36)
   receiverName  String   @map("receiver_name") @db.VarChar(50)
   receiverPhone String   @map("receiver_phone") @db.VarChar(20)
@@ -259,13 +300,14 @@ model UserCartItem {
   product   Product  @relation(fields: [productId], references: [id])
   user      User     @relation(fields: [userId], references: [id])
 
+  @@index([skuId])
   @@index([userId], map: "idx_user")
   @@index([productId], map: "user_cart_items_product_id_fkey")
   @@map("user_cart_items")
 }
 
 model UserFavorite {
-   id        Int      @id @default(autoincrement())
+  id        Int      @id @default(autoincrement())
   userId    String   @map("user_id") @db.VarChar(36)
   productId Int      @map("product_id")
   createdAt DateTime @default(now()) @map("created_at")
@@ -298,9 +340,8 @@ model Image {
 }
 
 enum ProductStatus {
-  DRAFT        
-  ONLINE       
-  OFFLINE      
-  DELETED      
+  DRAFT
+  ONLINE
+  OFFLINE
+  DELETED
 }
-

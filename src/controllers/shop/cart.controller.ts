@@ -50,7 +50,8 @@ export const cartController = {
                                                 id: true,
                                                 price: true,
                                                 promotion_price: true,
-                                                stock: true
+                                                stock: true,
+                                                image: true 
                                           }
                                     }
                               }
@@ -132,7 +133,12 @@ export const cartController = {
                   // 获取完整的SKU信息
                   const completeSkuInfo = await prisma.sku.findUnique({
                         where: { id: result.cartItem.skuId },
-                        include: {
+                        select: {       // 添加 select 块
+                              id: true,
+                              price: true,
+                              promotion_price: true,
+                              stock: true,
+                              image: true,  // 明确选择 image 字段
                               sku_specs: {
                                     include: {
                                           spec: true,
@@ -230,7 +236,12 @@ export const cartController = {
             // 获取完整的SKU信息
             const completeSkuInfo = await prisma.sku.findUnique({
                   where: { id: updatedCartItem.skuId },
-                  include: {
+                  select: {       // 添加 select 块
+                        id: true,
+                        price: true,
+                        promotion_price: true,
+                        stock: true,
+                        image: true,  // 明确选择 image 字段
                         sku_specs: {
                               include: {
                                     spec: true,
@@ -353,6 +364,7 @@ export const cartController = {
                                     price: true,
                                     promotion_price: true,
                                     stock: true,
+                                    image: true,
                                     sku_specs: {
                                           include: {
                                                 spec: { select: { name: true } },

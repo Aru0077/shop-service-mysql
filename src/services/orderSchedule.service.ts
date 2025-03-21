@@ -180,6 +180,53 @@ class OrderScheduleService {
             }
       };
 
+      // 处理过期QPay发票
+      async cleanupExpiredQPayInvoices() {
+            const taskName = 'cleanupExpiredQPayInvoices';
+            try {
+                  logger.info(`开始执行任务: ${taskName}`);
+                  const now = new Date();
+
+                  // 查找过期发票
+                  const expiredInvoices = await prisma.qpayInvoice.findMany({
+                        where: {
+                              status: 'PENDING',
+                              expiresAt: { lt: now }
+                        },
+                        include: {
+                              order: true
+                        }
+                  });
+
+                  if (expiredInvoices.length === 0) return;
+                  logger.info(`找到 ${expiredInvoices.length} 个过期QPay发票`);
+
+                  // 处理过期发票
+                  for (const invoice of expiredInvoices) {
+                        try {
+                              // 尝试取消QPay发票
+                              await qpayService.cancelInvoice(invoice.invoiceId);
+
+                              // 更新发票状态
+                              await prisma.qpayInvoice.update({
+                                    where: { id: invoice.id },
+                                    data: { status: 'EXPIRED' }
+                              });
+
+                              logger.info(`已过期QPay发票: ${invoice.invoiceId}, 订单: ${invoice.orderId}`);
+                        } catch (error) {
+                              logger.error(`处理过期QPay发票失败`, { error, invoiceId: invoice.invoiceId });
+                        }
+                  }
+
+                  this.retryCount[taskName] = 0;
+            } catch (error) {
+                  logger.error(`任务执行失败: ${taskName}`, { error });
+                  this.handleTaskError(taskName, this.cleanupExpiredQPayInvoices.bind(this));
+            }
+      }
+
+
       // 启动定时任务
       startScheduleTasks() {
             // 使用cron表达式替代setInterval
@@ -202,6 +249,13 @@ class OrderScheduleService {
                   logger.info('开始执行库存审计任务');
                   inventoryService.auditInventory().catch(error => {
                         logger.error('库存审计任务异常', { error });
+                  });
+            });
+
+            // 每10分钟执行一次清理过期QPay发票任务
+            this.taskRegistry.qpayInvoiceCleanup = cron.schedule('*/10 * * * *', () => {
+                  this.cleanupExpiredQPayInvoices().catch(error => {
+                        logger.error('清理过期QPay发票任务异常', { error });
                   });
             });
 
