@@ -5,7 +5,9 @@
   "scripts": {
     "start": "node dist/app.js",
     "dev": "nodemon src/app.ts",
-    "build": "tsc",
+    "build": "tsc && prisma generate",
+    "prod": "NODE_ENV=production node dist/app.js",
+    "pm2": "pm2 start dist/app.js --name express-ts-mysql",
     "watch-ts": "tsc -w",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",

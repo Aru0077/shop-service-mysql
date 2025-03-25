@@ -3,6 +3,7 @@ import axios from 'axios';
 import { prisma } from '../config';
 import { sign } from 'jsonwebtoken';
 import { logger } from '../utils/logger';
+import crypto from 'crypto';
 
 export class FacebookAuthService {
       private appId: string;
@@ -22,11 +23,14 @@ export class FacebookAuthService {
        * 获取Facebook登录URL
        */
       public getLoginUrl(): string {
+            const state = crypto.randomBytes(16).toString('hex');
+
             const scopes = ['public_profile'];
             return `https://www.facebook.com/${this.apiVersion}/dialog/oauth?` +
                   `client_id=${this.appId}` +
                   `&redirect_uri=${encodeURIComponent(this.redirectUri)}` +
                   `&scope=${encodeURIComponent(scopes.join(','))}` +
+                  `&state=${state}` +
                   `&response_type=code`;
       }
 
