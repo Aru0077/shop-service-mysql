@@ -6,6 +6,19 @@ import { tempOrderService } from '../../services/temp-order.service';
 import { cacheUtils } from '../../utils/cache.utils';
 
 export const tempOrderController = {
+      // 获取结账页面所需的所有信息（从 checkout.controller.ts 移过来）
+      getCheckoutInfo: asyncHandler(async (req: Request, res: Response) => {
+            const userId = req.shopUser?.id;
+
+            if (!userId) {
+                  throw new AppError(401, 'fail', '请先登录');
+            }
+
+            // 使用 tempOrderService 获取结账信息
+            const checkoutInfo = await tempOrderService.getCheckoutInfo(userId);
+            res.sendSuccess(checkoutInfo);
+      }),
+
       // 创建临时订单
       createTempOrder: asyncHandler(async (req: Request, res: Response) => {
             const userId = req.shopUser?.id;

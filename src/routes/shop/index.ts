@@ -6,8 +6,7 @@ import favoriteRoutes from './favorite';
 import addressRoutes from './address';
 import cartRoutes from './cart';
 import orderRoutes from './order';
-import promotionRoutes from './promotion';
-import checkoutRoutes from './checkout';
+import promotionRoutes from './promotion'; 
 import tempOrderRoutes from './temp-order';
 import qpayRoutes from './qpay';
 import facebookRoutes from './facebook';
@@ -34,9 +33,6 @@ router.use('/orders', orderRoutes);
 
 // 满减规则路由
 router.use('/promotions', promotionRoutes);
-
-// 结算相关路由
-router.use('/checkout', checkoutRoutes);
 
 // 临时订单相关路由
 router.use('/temp-order', tempOrderRoutes);

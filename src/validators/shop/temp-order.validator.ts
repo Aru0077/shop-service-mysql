@@ -76,3 +76,9 @@ export const refreshTempOrderSchema = z.object({
             id: z.string().uuid('无效的临时订单ID')
       })
 });
+
+// 新增：获取结账信息验证
+export const getCheckoutInfoSchema = z.object({
+      // 无需验证任何参数
+      query: z.object({}).optional()
+});
