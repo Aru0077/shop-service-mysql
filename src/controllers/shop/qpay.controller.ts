@@ -73,7 +73,7 @@ export const qpayController = {
 
             // 创建QPay发票
             const invoiceDescription = `Order #${order.orderNo}`;
-            const callbackUrl = `${process.env.API_BASE_URL}/shop/qpay/callback?orderId=${orderId}`;
+            const callbackUrl = `${process.env.QPAY_CALLBACK_URL}?orderId=${orderId}`;
 
             const invoice = await qpayService.createInvoice(
                   order.paymentAmount,

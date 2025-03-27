@@ -7,7 +7,8 @@ import {
     updateTempOrderSchema, 
     confirmTempOrderSchema,
     getTempOrderSchema,
-    refreshTempOrderSchema
+    refreshTempOrderSchema,
+    updateAndConfirmTempOrderSchema
 } from '../../validators/shop/temp-order.validator';
 import { shopAuthMiddleware } from '../../middlewares/shopAuth.middleware';
 
@@ -42,6 +43,13 @@ router.post(
     '/:id/confirm',
     validateRequest(confirmTempOrderSchema),
     tempOrderController.confirmTempOrder
+);
+
+// 更新并确认临时订单（一步操作）
+router.post(
+    '/:id/update-confirm',
+    validateRequest(updateAndConfirmTempOrderSchema),
+    tempOrderController.updateAndConfirmTempOrder
 );
 
 // 刷新临时订单有效期

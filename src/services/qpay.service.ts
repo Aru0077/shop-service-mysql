@@ -27,6 +27,15 @@ class QPayService {
             this.invoiceCode = process.env.QPAY_INVOICE_CODE || '';
             this.callbackUrl = process.env.QPAY_CALLBACK_URL || '';
 
+            // 验证必要的环境变量是否存在
+            if (!this.clientId || !this.clientSecret) {
+                  logger.error('QPay配置错误: 缺少客户端ID或密钥');
+            }
+
+            if (!this.callbackUrl) {
+                  logger.error('QPay配置错误: 缺少回调URL');
+            }
+
             // 创建axios实例
             this.axiosInstance = axios.create({
                   baseURL: this.apiUrl,
@@ -194,14 +203,18 @@ class QPayService {
             customCallbackUrl?: string
       ): Promise<QPayInvoiceResponse | null> {
             try {
+                  // 使用完整的回调URL，添加订单ID作为查询参数
+                  const callbackUrl = customCallbackUrl || `${this.callbackUrl}?orderId=${orderNo}`;
+
                   // 准备发票请求数据
                   const invoiceData: QPayInvoiceRequest = {
                         invoice_code: this.invoiceCode,
                         sender_invoice_no: orderNo,
                         invoice_receiver_code: 'terminal',
                         invoice_description: description,
+                        sender_branch_code: 'BRANCH1',
                         amount,
-                        callback_url: customCallbackUrl || `${this.callbackUrl}?order_no=${orderNo}`
+                        callback_url: callbackUrl
                   };
 
                   // 创建发票

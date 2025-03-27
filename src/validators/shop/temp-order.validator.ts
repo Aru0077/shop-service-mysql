@@ -82,3 +82,20 @@ export const getCheckoutInfoSchema = z.object({
       // 无需验证任何参数
       query: z.object({}).optional()
 });
+
+// 更新并确认临时订单验证
+export const updateAndConfirmTempOrderSchema = z.object({
+      params: z.object({
+            id: z.string().uuid('无效的临时订单ID')
+      }),
+      body: z.object({
+            // 收货地址ID
+            addressId: z.number().int().positive('地址ID必须为正整数').optional(),
+
+            // 支付方式
+            paymentType: z.string().optional(),
+
+            // 订单备注
+            remark: z.string().max(200, '备注不能超过200个字符').optional()
+      })
+});
