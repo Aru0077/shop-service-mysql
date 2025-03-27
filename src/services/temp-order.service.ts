@@ -1,5 +1,6 @@
 // src/services/temp-order.service.ts
 import { prisma, redisClient } from '../config';
+import { PrismaClient, Prisma } from '@prisma/client';
 import { v4 as uuidv4 } from 'uuid';
 import { AppError } from '../utils/http.utils';
 import { OrderStatus, PaymentStatus } from '../constants/orderStatus.enum';
@@ -117,7 +118,7 @@ export const tempOrderService = {
             ]);
 
             // QPay是唯一支持的支付方式
-            const paymentType = 'qpay'; 
+            const paymentType = 'qpay';
 
             // 构建响应数据 
             return {
@@ -613,6 +614,220 @@ export const tempOrderService = {
                 createdAt: result.createdAt,
                 timeoutSeconds: 600, // 10分钟支付超时
                 promotion: tempOrder.promotion
+            };
+        } finally {
+            // 确保在任何情况下都释放锁
+            await redisClient.del(lockKey);
+        }
+    },
+
+    /**
+     * 更新并确认临时订单（一步完成）
+     * @param id 临时订单ID
+     * @param userId 用户ID
+     * @param updates 更新内容
+     * @returns 创建的订单基本信息
+     */
+    async updateAndConfirmTempOrder(
+        id: string,
+        userId: string,
+        updates: {
+            addressId?: number;
+            paymentType?: string;
+            remark?: string;
+        }
+    ): Promise<any> {
+        // 获取临时订单
+        const tempOrder = await this.getTempOrder(id, userId);
+
+        // 验证临时订单是否过期
+        const expireTime = new Date(tempOrder.expireTime);
+        if (expireTime < new Date()) {
+            throw new AppError(400, 'fail', '临时订单已过期，请重新下单');
+        }
+
+        // 合并更新内容
+        const updatedTempOrder = {
+            ...tempOrder,
+            ...updates
+        };
+
+        // 验证必要信息是否完整
+        const addressId = updatedTempOrder.addressId;
+        if (!addressId) {
+            throw new AppError(400, 'fail', '请选择收货地址');
+        }
+
+        // 使用分布式锁确保同一时间只有一个请求能处理此订单
+        const lockKey = `order:create:lock:${id}`;
+        const lockAcquired = await redisClient.set(lockKey, '1', {
+            NX: true,
+            EX: 30 // 30秒锁定时间
+        });
+
+        if (!lockAcquired) {
+            throw new AppError(429, 'fail', '订单正在处理中，请勿重复提交');
+        }
+
+        try {
+            // 生成订单号
+            const orderNo = orderService.generateOrderNo();
+
+            // 查询地址信息
+            const address = await prisma.userAddress.findFirst({
+                where: {
+                    id: addressId,
+                    userId
+                }
+            });
+
+            if (!address) {
+                throw new AppError(404, 'fail', '收货地址不存在');
+            }
+
+            // 准备地址数据
+            const addressData = {
+                receiverName: address.receiverName,
+                receiverPhone: address.receiverPhone,
+                province: address.province,
+                city: address.city,
+                detailAddress: address.detailAddress
+            };
+
+            // 准备订单项
+            const orderItems = updatedTempOrder.items.map(item => ({
+                skuId: item.skuId,
+                productName: item.productName,
+                mainImage: item.mainImage,
+                skuSpecs: item.skuSpecs,
+                quantity: item.quantity,
+                unitPrice: item.unitPrice,
+                totalPrice: item.totalPrice
+            }));
+
+            // 开始事务，使用ReadCommitted隔离级别降低锁冲突
+            const result = await prisma.$transaction(async (tx) => {
+                // 1. 创建订单记录
+                const order = await tx.order.create({
+                    data: {
+                        id: uuidv4(), // 订单ID
+                        orderNo,
+                        userId,
+                        orderStatus: OrderStatus.PENDING_PAYMENT,
+                        paymentStatus: PaymentStatus.UNPAID,
+                        shippingAddress: addressData,
+                        totalAmount: updatedTempOrder.totalAmount,
+                        discountAmount: updatedTempOrder.discountAmount,
+                        paymentAmount: updatedTempOrder.paymentAmount,
+                        promotionId: updatedTempOrder.promotion?.id || null,
+                    }
+                });
+
+                // 2. 批量创建订单项记录 - 使用高效的批量操作
+                await tx.orderItem.createMany({
+                    data: orderItems.map(item => ({
+                        orderId: order.id,
+                        ...item
+                    }))
+                });
+
+                // 3. 锁定商品库存 - 仅执行关键操作
+                const stockUpdates = [];
+                for (const item of updatedTempOrder.items) {
+                    // 获取当前库存进行验证
+                    const sku = await tx.sku.findUnique({
+                        where: { id: item.skuId },
+                        select: { id: true, stock: true, lockedStock: true }
+                    });
+
+                    if (!sku || (sku.stock || 0) < item.quantity) {
+                        throw new AppError(400, 'fail', `商品"${item.productName}"库存不足`);
+                    }
+
+                    // 更新锁定库存
+                    await tx.sku.update({
+                        where: { id: item.skuId },
+                        data: { lockedStock: { increment: item.quantity } }
+                    });
+
+                    // 记录需要添加的库存日志
+                    stockUpdates.push({
+                        skuId: item.skuId,
+                        changeQuantity: -item.quantity,
+                        currentStock: sku.stock || 0,
+                        type: StockChangeType.ORDER_LOCK,
+                        orderNo,
+                        remark: `订单${orderNo}预占库存`,
+                        operator: 'system'
+                    });
+                }
+
+                return {
+                    order,
+                    stockUpdates
+                };
+            }, {
+                timeout: 30000, // 增加超时时间到30秒
+                // isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted // 降低隔离级别
+                isolationLevel: 'ReadCommitted'
+            });
+
+            // 事务后异步处理非核心操作
+            setTimeout(async () => {
+                try {
+                    // 1. 异步创建库存日志
+                    if (result.stockUpdates.length > 0) {
+                        await prisma.stockLog.createMany({
+                            data: result.stockUpdates
+                        });
+                    }
+
+                    // 2. 清理购物车（如果是购物车模式）
+                    if (updatedTempOrder.mode === 'cart' && updatedTempOrder.cartItemIds) {
+                        await prisma.userCartItem.deleteMany({
+                            where: {
+                                id: { in: updatedTempOrder.cartItemIds },
+                                userId
+                            }
+                        });
+                    }
+
+                    // 3. 设置订单超时自动取消
+                    const cancelOrderKey = `order:${result.order.id}:auto_cancel`;
+                    await redisClient.setEx(cancelOrderKey, 600, orderNo);
+
+                    // 4. 添加到订单取消队列
+                    await orderQueue.add('monitorOrderExpiry', {
+                        orderId: result.order.id,
+                        orderNo,
+                        expiryTime: Date.now() + 600000 // 10分钟后
+                    }, {
+                        delay: 600000,
+                        attempts: 3,
+                        removeOnComplete: true
+                    });
+                } catch (error) {
+                    // 记录错误但不影响主流程
+                    console.error('订单后台处理任务失败:', error);
+                }
+            }, 0);
+
+            // 删除临时订单
+            await redisClient.del(`temp_order:${id}`);
+            memoryCache.del(`temp_order:${id}`);
+
+            // 返回订单信息
+            return {
+                id: result.order.id,
+                orderNo: result.order.orderNo,
+                totalAmount: result.order.totalAmount,
+                discountAmount: result.order.discountAmount,
+                paymentAmount: result.order.paymentAmount,
+                orderStatus: result.order.orderStatus,
+                paymentStatus: result.order.paymentStatus,
+                createdAt: result.order.createdAt,
+                timeoutSeconds: 600, // 10分钟支付超时
+                promotion: updatedTempOrder.promotion
             };
         } finally {
             // 确保在任何情况下都释放锁

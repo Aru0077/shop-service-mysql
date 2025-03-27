@@ -112,6 +112,37 @@ export const tempOrderController = {
             res.sendSuccess(order, '订单创建成功，请在10分钟内完成支付');
       }),
 
+      // 更新并确认临时订单（一步操作）
+      updateAndConfirmTempOrder: asyncHandler(async (req: Request, res: Response) => {
+            const userId = req.shopUser?.id;
+            const { id } = req.params;
+            const { addressId, paymentType, remark } = req.body;
+
+            if (!userId) {
+                  throw new AppError(401, 'fail', '请先登录');
+            }
+
+            // 添加幂等控制
+            const idempotencyKey = `confirm_temp_order:${id}:${userId}`;
+            const existingOrderId = await cacheUtils.getOrSet(idempotencyKey, async () => null, 600);
+
+            if (existingOrderId) {
+                  throw new AppError(400, 'fail', '此临时订单已被处理，请勿重复操作');
+            }
+
+            // 一步完成更新和确认
+            const order = await tempOrderService.updateAndConfirmTempOrder(
+                  id,
+                  userId,
+                  { addressId, paymentType, remark }
+            );
+
+            // 设置幂等键，防止重复提交
+            await cacheUtils.getOrSet(idempotencyKey, async () => order.id, 3600);
+
+            res.sendSuccess(order, '订单创建成功，请在10分钟内完成支付');
+      }),
+
       // 扩展：刷新临时订单有效期
       refreshTempOrder: asyncHandler(async (req: Request, res: Response) => {
             const userId = req.shopUser?.id;
