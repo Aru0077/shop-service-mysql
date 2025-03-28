@@ -33,10 +33,10 @@ export interface QPayInvoiceRequest {
 // QPay发票响应
 export interface QPayInvoiceResponse {
       invoice_id: string;
-      qr_text?: string;
-      qr_image?: string;
-      qPay_shortUrl?: string;
-      urls?: {
+      qr_text: string;
+      qr_image: string;
+      qPay_shortUrl: string;
+      urls: {
             name: string;
             description: string;
             logo: string;

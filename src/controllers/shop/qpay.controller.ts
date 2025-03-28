@@ -105,10 +105,10 @@ export const qpayController = {
             // 返回支付信息
             res.sendSuccess({
                   invoiceId: invoice.invoice_id,
-                  qrImage: invoice.qr_image,
-                  qrText: invoice.qr_text,
+                  qrImage: invoice.qr_image || null,
+                  qrText: invoice.qr_text || null,
                   qPayShortUrl: invoice.qPay_shortUrl || null,
-                  urls: invoice.urls ? invoice.urls : null,  
+                  urls: invoice.urls || null,  
                   orderId
             });
       }),
