@@ -33,9 +33,9 @@ export interface QPayInvoiceRequest {
 // QPay发票响应
 export interface QPayInvoiceResponse {
       invoice_id: string;
-      qr_text: string;
-      qr_image: string;
-      invoice_url: string;
+      qr_text?: string;
+      qr_image?: string;
+      invoice_url?: string;
       deep_link?: string;
       urls?: {
             name: string;
