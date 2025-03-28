@@ -35,8 +35,7 @@ export interface QPayInvoiceResponse {
       invoice_id: string;
       qr_text?: string;
       qr_image?: string;
-      invoice_url?: string;
-      deep_link?: string;
+      qPay_shortUrl?: string;
       urls?: {
             name: string;
             description: string;

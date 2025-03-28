@@ -65,8 +65,8 @@ export const qpayController = {
                         invoiceId: existingInvoice.invoiceId,
                         qrImage: existingInvoice.qrImage,
                         qrText: existingInvoice.qrText,
-                        invoiceUrl: existingInvoice.invoiceUrl,
-                        deepLink: existingInvoice.deepLink,
+                        qPayShortUrl: existingInvoice.qPayShortUrl,
+                        urls: existingInvoice.urls,
                         orderId
                   });
             }
@@ -86,6 +86,8 @@ export const qpayController = {
                   throw new AppError(500, 'fail', '创建支付发票失败，请稍后重试');
             }
 
+            console.log('QPay发票创建成功', invoice);
+            
             // 保存发票信息
             await prisma.qPayInvoice.create({
                   data: {
@@ -93,8 +95,8 @@ export const qpayController = {
                         invoiceId: invoice.invoice_id,
                         qrImage: invoice.qr_image,
                         qrText: invoice.qr_text,
-                        invoiceUrl: invoice.invoice_url,
-                        deepLink: invoice.deep_link || null,
+                        qPayShortUrl: invoice.qPay_shortUrl || null,
+                        urls: invoice.urls,  
                         status: 'PENDING',
                         expiresAt: new Date(Date.now() + 30 * 60 * 1000) // 30分钟有效期
                   }
@@ -105,8 +107,8 @@ export const qpayController = {
                   invoiceId: invoice.invoice_id,
                   qrImage: invoice.qr_image,
                   qrText: invoice.qr_text,
-                  invoiceUrl: invoice.invoice_url,
-                  deepLink: invoice.deep_link,
+                  qPayShortUrl: invoice.qPay_shortUrl || null,
+                  urls: invoice.urls ? invoice.urls : null,  
                   orderId
             });
       }),
