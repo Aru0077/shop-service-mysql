@@ -22,25 +22,17 @@ export const facebookController = {
         const { code } = req.query;
 
         if (!code || typeof code !== 'string') {
-            throw new AppError(400, 'fail', '无效的请求');
+            return res.redirect('https://www.uni-mall-mn.shop/login?error=无效的请求');
         }
 
         try {
-            logger.info('收到Facebook回调请求', {
-                codeLength: code.length,
-                url: req.originalUrl
-            });
-
             // 获取访问令牌
             const accessToken = await facebookAuthService.getAccessToken(code);
-            if (!accessToken) {
-                throw new AppError(401, 'fail', '无法获取访问令牌');
-            }
 
             // 验证令牌
             const isValid = await facebookAuthService.verifyAccessToken(accessToken);
             if (!isValid) {
-                throw new AppError(401, 'fail', '无效的访问令牌');
+                return res.redirect('https://www.uni-mall-mn.shop/login?error=无效的访问令牌');
             }
 
             // 获取用户信息
@@ -56,23 +48,15 @@ export const facebookController = {
                 authResult.token
             );
 
-            // 返回用户信息和令牌
-            res.sendSuccess({
-                token: authResult.token,
-                user: authResult.user
-            }, '登录成功');
-
-            logger.info('Facebook登录成功', {
-                userId: authResult.user.id,
-                facebookId: facebookUser.id
-            });
+            // 重定向回前端，附带成功消息和令牌
+            return res.redirect(`https://www.uni-mall-mn.shop/auth/login-success?token=${authResult.token}&userId=${authResult.user.id}`);
         } catch (error: any) {
             logger.error('Facebook登录失败', {
                 errorMessage: error.message,
                 errorName: error.name,
                 stack: error.stack
             });
-            throw new AppError(500, 'fail', '登录处理失败');
+            return res.redirect('https://www.uni-mall-mn.shop/login?error=登录处理失败');
         }
     }),
 
