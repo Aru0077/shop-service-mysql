@@ -26,8 +26,16 @@ export const facebookController = {
         }
 
         try {
+            logger.info('收到Facebook回调请求', {
+                codeLength: code.length,
+                url: req.originalUrl
+            });
+
             // 获取访问令牌
             const accessToken = await facebookAuthService.getAccessToken(code);
+            if (!accessToken) {
+                throw new AppError(401, 'fail', '无法获取访问令牌');
+            }
 
             // 验证令牌
             const isValid = await facebookAuthService.verifyAccessToken(accessToken);

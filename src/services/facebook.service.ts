@@ -18,11 +18,21 @@ export class FacebookAuthService {
             this.apiVersion = process.env.FACEBOOK_API_VERSION || 'v22.0';
             this.redirectUri = process.env.FACEBOOK_REDIRECT_URI || '';
 
-            // 记录配置信息到日志
-            logger.info('Facebook Auth Service 初始化', {
-                  appId: this.appId ? '已配置' : '未配置',
-                  redirectUri: this.redirectUri
-            });
+            // 验证必要的配置
+            const missingConfig = [];
+            if (!this.appId) missingConfig.push('FACEBOOK_APP_ID');
+            if (!this.appSecret) missingConfig.push('FACEBOOK_APP_SECRET');
+            if (!this.redirectUri) missingConfig.push('FACEBOOK_REDIRECT_URI');
+
+            if (missingConfig.length > 0) {
+                  logger.error('Facebook Auth Service 初始化失败：缺少必要配置', { missingConfig });
+            } else {
+                  logger.info('Facebook Auth Service 初始化成功', {
+                        appId: this.appId ? '已配置' : '未配置',
+                        redirectUri: this.redirectUri,
+                        apiVersion: this.apiVersion
+                  });
+            }
       }
 
       /**
@@ -45,8 +55,16 @@ export class FacebookAuthService {
        */
       public async getAccessToken(code: string): Promise<string> {
             try {
-                  const response = await axios.get(
+                  // 日志记录请求参数（不含敏感信息）
+                  logger.info('正在请求Facebook访问令牌', {
+                        apiVersion: this.apiVersion,
+                        redirectUri: this.redirectUri
+                  });
+
+                  // 使用 POST 而非 GET，避免 URL 长度限制
+                  const response = await axios.post(
                         `https://graph.facebook.com/${this.apiVersion}/oauth/access_token`,
+                        null, // POST 请求体为空
                         {
                               params: {
                                     client_id: this.appId,
@@ -56,13 +74,21 @@ export class FacebookAuthService {
                               }
                         }
                   );
+
+                  logger.info('Facebook访问令牌获取成功');
                   return response.data.access_token;
             } catch (error: any) {
-                  logger.error('获取Facebook访问令牌失败', {
+                  // 增强错误记录，捕获更多详细信息
+                  const errorData = error.response?.data || {};
+                  const errorDetails = {
+                        statusCode: error.response?.status,
                         errorMessage: error.message,
                         errorName: error.name,
-                        code: code // 记录授权码（可能需要部分隐藏保护隐私）
-                  });
+                        fbError: errorData.error,
+                        redirectUri: this.redirectUri
+                  };
+
+                  logger.error('获取Facebook访问令牌失败', errorDetails);
                   throw new Error('获取访问令牌失败');
             }
       }
