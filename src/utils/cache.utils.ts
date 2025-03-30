@@ -15,8 +15,22 @@ export const CACHE_LEVELS = {
 const memoryCache = new NodeCache({
     stdTTL: 120,       // 默认2分钟
     checkperiod: 60,   // 每分钟检查过期
-    useClones: false   // 不克隆对象，提高性能
+    useClones: false,   // 不克隆对象，提高性能
+    maxKeys: 1000      // 限制最大缓存项数量
 });
+
+// 添加缓存大小监控函数
+const MAX_CACHE_SIZE = 100 * 1024 * 1024; // 100MB
+function monitorCacheSize() {
+    const stats = memoryCache.getStats();
+    if (stats.vsize > MAX_CACHE_SIZE) {
+        console.log(`缓存大小超过限制, 当前: ${Math.round(stats.vsize / 1024 / 1024)}MB, 执行清理`);
+        const keys = memoryCache.keys();
+        const keysToRemove = keys.slice(0, Math.floor(keys.length * 0.3)); // 删除30%的缓存
+        keysToRemove.forEach(key => memoryCache.del(key));
+    }
+}
+
 
 // 内存缓存状态指标
 let memoryCacheHits = 0;
@@ -40,6 +54,10 @@ export const cacheUtils = {
 
     // 多级缓存获取或设置方法
     async multiLevelCache(key: string, callback: () => Promise<any>, ttl: number = 300) {
+
+        // 定期监控缓存大小
+        monitorCacheSize();
+
         // 1. 查询内存缓存
         const memCached = memoryCache.get(key);
         if (memCached) {
@@ -135,6 +153,20 @@ export const cacheUtils = {
             await redisClient.expire(key, period);
         }
         return current <= limit;
+    },
+
+    // 添加新的清理函数
+    async forceCacheClear(level: 'memory' | 'redis' | 'all' = 'all') {
+        if (level === 'memory' || level === 'all') {
+            memoryCache.flushAll();
+        }
+        if (level === 'redis' || level === 'all') {
+            const keys = await redisClient.keys('*');
+            if (keys.length > 0) {
+                await redisClient.del(keys);
+            }
+        }
+        return true;
     },
 
     // 获取缓存命中率统计

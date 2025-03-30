@@ -126,6 +126,7 @@ export const statisticsController = {
       }),
 
       // 获取过去30天的每日销量
+      // 修改过去30天销量数据查询
       getLast30DaysSales: asyncHandler(async (req: Request, res: Response) => {
             // 计算30天前的日期
             const endDate = new Date();
@@ -134,34 +135,49 @@ export const statisticsController = {
             startDate.setDate(startDate.getDate() - 29);
             startDate.setHours(0, 0, 0, 0);
 
-            // 获取过去30天每天的销量统计
+            // 使用分组聚合，直接获取结果而不是原始数据
             const dailySalesData = await prisma.$queryRaw`
-            SELECT 
-                DATE(created_at) as date,
-                COUNT(*) as count
-            FROM 
-                order_items
-            WHERE 
-                created_at >= ${startDate} 
-                AND created_at <= ${endDate}
-                AND EXISTS (
-                    SELECT 1 FROM orders 
-                    WHERE orders.id = order_items.order_id 
-                    AND orders.payment_status = ${PaymentStatus.PAID}
-                    AND orders.order_status IN (
-                        ${OrderStatus.COMPLETED},
-                        ${OrderStatus.SHIPPED},
-                        ${OrderStatus.PENDING_SHIPMENT}
-                    )
-                )
-            GROUP BY 
-                DATE(created_at)
-            ORDER BY 
-                date ASC
-        `;
+          SELECT 
+              DATE(created_at) as date,
+              COUNT(*) as count
+          FROM 
+              order_items
+          WHERE 
+              created_at >= ${startDate} 
+              AND created_at <= ${endDate}
+              AND EXISTS (
+                  SELECT 1 FROM orders 
+                  WHERE orders.id = order_items.order_id 
+                  AND orders.payment_status = ${PaymentStatus.PAID}
+                  AND orders.order_status IN (
+                      ${OrderStatus.COMPLETED},
+                      ${OrderStatus.SHIPPED},
+                      ${OrderStatus.PENDING_SHIPMENT}
+                  )
+              )
+          GROUP BY 
+              DATE(created_at)
+          ORDER BY 
+              date ASC
+          LIMIT 31
+      `;
 
-            // 填充没有数据的日期
-            const filledData = fillMissingDates(dailySalesData as any[], startDate, endDate, 'count');
+            // 使用更高效的方式填充日期
+            const resultMap = new Map();
+            (dailySalesData as any[]).forEach(item => {
+                  resultMap.set(item.date.toISOString().split('T')[0], item.count || 0);
+            });
+
+            const filledData = [];
+            const current = new Date(startDate);
+            while (current <= endDate) {
+                  const dateStr = current.toISOString().split('T')[0];
+                  filledData.push({
+                        date: dateStr,
+                        value: resultMap.get(dateStr) || 0
+                  });
+                  current.setDate(current.getDate() + 1);
+            }
 
             res.sendSuccess(filledData);
       }),

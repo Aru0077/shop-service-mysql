@@ -23,8 +23,25 @@ const redisClient = createClient({
     socket: {
         connectTimeout: 10000,
         keepAlive: 5000,
-        reconnectStrategy: (retries) => Math.min(retries * 100, 3000),
-    }
+        reconnectStrategy(retries) {
+            // 这是新版 Redis 客户端中类似功能的配置方式
+            if (retries > 3) {
+              return new Error('Max retries reached');
+            }
+            return Math.min(retries * 100, 3000);
+          }
+    },
+    // 添加连接池限制
+    commandsQueueMaxLength: 50000, // 限制命令队列长度 
+});
+
+// 添加连接断开和重连监听
+redisClient.on('error', (error) => {
+    console.error('Redis 连接错误:', error);
+});
+
+redisClient.on('reconnecting', () => {
+    console.log('Redis 正在重新连接...');
 });
 
 // Redis 连接处理

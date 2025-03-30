@@ -5,7 +5,7 @@ import { OrderStatus, PaymentStatus } from '../constants/orderStatus.enum';
 import { StockChangeType } from '../constants/stock.constants';
 import { logger } from '../utils/logger';
 import { inventoryService } from './inventory.service';
-import { qpayService } from './qpay.service'; 
+import { qpayService } from './qpay.service';
 
 class OrderScheduleService {
       private taskRegistry: Record<string, cron.ScheduledTask> = {};
@@ -227,19 +227,87 @@ class OrderScheduleService {
             }
       }
 
+      // 添加分批处理方法
+      async cancelUnpaidOrdersWithBatch() {
+            const batchSize = 50; // 每批处理50个订单
+            const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
+
+            let processedCount = 0;
+            let hasMore = true;
+
+            while (hasMore) {
+                  // 分页查询超时订单
+                  const unpaidOrders = await prisma.order.findMany({
+                        where: {
+                              orderStatus: OrderStatus.PENDING_PAYMENT,
+                              paymentStatus: PaymentStatus.UNPAID,
+                              createdAt: { lt: tenMinutesAgo }
+                        },
+                        include: {
+                              orderItems: {
+                                    select: { id: true, skuId: true, quantity: true }
+                              }
+                        },
+                        take: batchSize,
+                        skip: processedCount
+                  });
+
+                  if (unpaidOrders.length === 0) {
+                        hasMore = false;
+                        break;
+                  }
+
+                  // 处理这一批订单
+                  for (const order of unpaidOrders) {
+                        try {
+                              await prisma.$transaction(async (tx) => {
+                                    // 更新订单状态
+                                    await tx.order.update({
+                                          where: { id: order.id },
+                                          data: { orderStatus: OrderStatus.CANCELLED }
+                                    });
+
+                                    // 处理库存...
+                              });
+                        } catch (error) {
+                              logger.error(`处理订单 ${order.id} 失败`, { error });
+                        }
+                  }
+
+                  processedCount += unpaidOrders.length;
+                  console.log(`已处理 ${processedCount} 个超时订单`);
+            }
+
+            return processedCount;
+      }
+
 
       // 启动定时任务
       startScheduleTasks() {
             // 使用cron表达式替代setInterval
             // 每分钟执行一次取消超时订单任务
-            this.taskRegistry.cancelUnpaid = cron.schedule('* * * * *', () => {
-                  this.cancelUnpaidOrders().catch(error => {
+            this.taskRegistry.cancelUnpaid = cron.schedule('*/5 * * * *', async () => {
+                  try {
+                        // 添加内存使用情况日志
+                        const memBefore = process.memoryUsage().heapUsed / 1024 / 1024;
+                        console.log(`取消超时订单任务开始, 内存使用: ${memBefore.toFixed(2)}MB`);
+
+                        await this.cancelUnpaidOrdersWithBatch();
+
+                        // 执行完成后手动触发垃圾回收
+                        if (global.gc) {
+                              global.gc();
+                        }
+
+                        const memAfter = process.memoryUsage().heapUsed / 1024 / 1024;
+                        console.log(`取消超时订单任务完成, 内存使用: ${memAfter.toFixed(2)}MB, 差异: ${(memAfter - memBefore).toFixed(2)}MB`);
+                  } catch (error) {
                         logger.error('取消超时订单任务异常', { error });
-                  });
-            });
+                  }
+            }); 1
 
             // 每5分钟执行一次自动完成订单任务
-            this.taskRegistry.autoComplete = cron.schedule('*/5 * * * *', () => {
+            this.taskRegistry.autoComplete = cron.schedule('*/15 * * * *', () => {
                   this.completeOrders().catch(error => {
                         logger.error('自动完成订单任务异常', { error });
                   });

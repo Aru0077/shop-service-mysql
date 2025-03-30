@@ -236,6 +236,18 @@ orderQueue.process('processOrderItems', async (job) => {
       }
 });
 
+// 在队列处理器中处理库存更新
+orderQueue.process('processPostPayment', async (job) => {
+      const { orderId, orderNo, orderItems } = job.data;
+
+      // 异步处理库存实际扣减和销量更新
+      const inventoryTasks = orderItems.map((item:any) =>
+            inventoryService.confirmPreOccupied(item.skuId, item.quantity, orderNo)
+      );
+      await Promise.all(inventoryTasks);
+
+      // 更新销量等其他操作...
+});
 
 // 监听队列错误
 orderQueue.on('error', (error) => {

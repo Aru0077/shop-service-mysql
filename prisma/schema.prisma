@@ -13,8 +13,8 @@ model QPayInvoice {
   id         String   @id @default(uuid())
   orderId    String   @map("order_id")
   invoiceId  String   @map("invoice_id")
-  qrImage    String?   @map("qr_image")
-  qrText     String?   @map("qr_text")
+  qrImage    String?   @map("qr_image") @db.Text
+  qrText     String?   @map("qr_text")  @db.Text
   qPayShortUrl String?  @map("qpay_short_url")
   urls         Json?    @map("urls")
   status     String   @default("PENDING") // PENDING, PAID, CANCELLED, EXPIRED

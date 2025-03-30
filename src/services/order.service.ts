@@ -491,94 +491,76 @@ class OrderService {
       async processOrderPayment(orderId: string, userId: string, paymentType: string, transactionId: string) {
             // 验证订单
             const order = await prisma.order.findFirst({
-                  where: { id: orderId, userId },
-                  select: {
-                        id: true,
-                        orderNo: true,
-                        orderStatus: true,
-                        paymentStatus: true,
-                        paymentAmount: true,
-                        orderItems: {
-                              select: {
-                                    id: true,
-                                    skuId: true,
-                                    quantity: true
-                              }
+                where: { id: orderId, userId },
+                select: {
+                    id: true,
+                    orderNo: true,
+                    orderStatus: true,
+                    paymentStatus: true,
+                    paymentAmount: true,
+                    orderItems: {
+                        select: {
+                            id: true,
+                            skuId: true,
+                            quantity: true
                         }
-                  }
+                    }
+                }
             });
-
+        
             if (!order) {
-                  throw new AppError(404, 'fail', '订单不存在');
+                throw new AppError(404, 'fail', '订单不存在');
             }
-
+        
             if (order.orderStatus !== OrderStatus.PENDING_PAYMENT) {
-                  throw new AppError(400, 'fail', '订单状态不正确，无法支付');
+                throw new AppError(400, 'fail', '订单状态不正确，无法支付');
             }
-
-            if (order.paymentStatus === PaymentStatus.PAID) {
-                  return { orderId: order.id };
-            }
-
-            // 检查订单是否已超时
-            const cancelOrderKey = `order:${order.id}:auto_cancel`;
-            const isOrderValid = await redisClient.exists(cancelOrderKey);
-
-            if (isOrderValid === 0) {
-                  throw new AppError(400, 'fail', '订单已超时，请重新下单');
-            }
-
-            // 实际支付流程 - 在真实环境中应调用支付网关
-            try {
-                  // 使用事务保证数据一致性
-                  await prisma.$transaction(async (tx) => {
-                        // 创建支付记录
-                        await tx.paymentLog.create({
-                              data: {
-                                    orderId: order.id,
-                                    amount: order.paymentAmount,
-                                    paymentType,
-                                    transactionId,
-                                    status: 1 // 支付成功
-                              }
-                        });
-
-                        // 更新订单状态
-                        await tx.order.update({
-                              where: { id: order.id },
-                              data: {
-                                    orderStatus: OrderStatus.PENDING_SHIPMENT,
-                                    paymentStatus: PaymentStatus.PAID
-                              }
-                        });
-                  });
-
-                  // 支付成功后的操作
-                  // 删除订单超时任务
-                  await redisClient.del(cancelOrderKey);
-
-                  // 从延迟队列中移除自动取消任务
-                  await orderQueue.removeJobs(`orderExpiry:${orderId}`);
-
-                  // 设置12小时后自动完成订单
-                  const autoCompleteKey = `order:${order.id}:auto_complete`;
-                  await redisClient.setEx(autoCompleteKey, 12 * 60 * 60, '1');
-
-                  // 异步处理库存实际扣减
-                  await this.processPostPaymentTasks(order);
-
-                  return {
+        
+            // 减少事务中的操作，仅保留关键状态更新
+            await prisma.$transaction(async (tx) => {
+                // 创建支付记录
+                await tx.paymentLog.create({
+                    data: {
                         orderId: order.id,
-                        orderNo: order.orderNo,
-                        paymentStatus: PaymentStatus.PAID,
+                        amount: order.paymentAmount,
+                        paymentType,
+                        transactionId,
+                        status: 1 // 支付成功
+                    }
+                });
+        
+                // 更新订单状态
+                await tx.order.update({
+                    where: { id: order.id },
+                    data: {
                         orderStatus: OrderStatus.PENDING_SHIPMENT,
-                        transactionId
-                  };
-            } catch (error) {
-                  console.error('支付处理失败:', error);
-                  throw new AppError(500, 'fail', '支付处理失败，请稍后重试');
-            }
-      }
+                        paymentStatus: PaymentStatus.PAID
+                    }
+                });
+            });
+        
+            // 取消订单超时任务
+            const cancelOrderKey = `order:${order.id}:auto_cancel`;
+            await redisClient.del(cancelOrderKey);
+        
+            // 使用队列系统处理后续任务，减少内存占用
+            await orderQueue.add('processPostPayment', {
+                orderId: order.id,
+                orderNo: order.orderNo,
+                orderItems: order.orderItems
+            }, {
+                attempts: 3,
+                removeOnComplete: true
+            });
+        
+            return {
+                orderId: order.id,
+                orderNo: order.orderNo,
+                paymentStatus: PaymentStatus.PAID,
+                orderStatus: OrderStatus.PENDING_SHIPMENT,
+                transactionId
+            };
+        }
 
       // 支付后的异步任务处理
       async processPostPaymentTasks(order: any) {
