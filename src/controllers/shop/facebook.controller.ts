@@ -60,8 +60,8 @@ export const facebookController = {
             });
         } catch (error: any) {
             logger.error('Facebook登录失败', {
-                error: error.message,
-                code,
+                errorMessage: error.message,
+                errorName: error.name,
                 stack: error.stack
             });
             throw new AppError(500, 'fail', '登录处理失败');

@@ -159,12 +159,67 @@ class LoggerService {
        * 格式化日志消息
        */
       private formatLogMessage = (info: any) => {
-            const { timestamp, level, message, metadata } = info;
-            const metaStr = metadata && Object.keys(metadata).length
-                  ? JSON.stringify(metadata, null, 2)
-                  : '';
+            const { timestamp, level, message } = info;
+
+            // 安全处理 metadata，避免循环引用
+            let metaStr = '';
+            if (info.metadata && Object.keys(info.metadata).length) {
+                  try {
+                        // 过滤或处理可能包含循环引用的对象
+                        const safeMetadata = this.sanitizeForLogging(info.metadata);
+                        metaStr = JSON.stringify(safeMetadata);
+                  } catch (err) {
+                        metaStr = '[无法序列化的数据]';
+                  }
+            }
 
             return `${timestamp} ${level}: ${message} ${metaStr}`;
+      };
+
+      // 添加一个新方法来安全处理日志数据
+      private sanitizeForLogging(data: any): any {
+            if (!data) return data;
+
+            // 处理错误对象
+            if (data instanceof Error) {
+                  return {
+                        name: data.name,
+                        message: data.message,
+                        stack: data.stack
+                  };
+            }
+
+            // 对象处理
+            if (typeof data === 'object') {
+                  const result: any = Array.isArray(data) ? [] : {};
+
+                  // 只保留一级属性，避免深层循环引用
+                  for (const key in data) {
+                        if (Object.prototype.hasOwnProperty.call(data, key)) {
+                              const value = data[key];
+
+                              // 跳过函数、请求、响应对象等不可序列化的对象
+                              if (typeof value === 'function' ||
+                                    key === 'req' || key === 'res' ||
+                                    key === 'request' || key === 'response') {
+                                    continue;
+                              }
+
+                              // 处理基本类型和可序列化对象
+                              if (value === null ||
+                                    typeof value !== 'object' ||
+                                    value instanceof Date) {
+                                    result[key] = value;
+                              } else {
+                                    // 对象或数组使用简单描述替代
+                                    result[key] = `[${Array.isArray(value) ? 'Array' : 'Object'}]`;
+                              }
+                        }
+                  }
+                  return result;
+            }
+
+            return data;
       }
 
       /**

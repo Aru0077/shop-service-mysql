@@ -57,8 +57,12 @@ export class FacebookAuthService {
                         }
                   );
                   return response.data.access_token;
-            } catch (error) {
-                  logger.error('获取Facebook访问令牌失败', error);
+            } catch (error: any) {
+                  logger.error('获取Facebook访问令牌失败', {
+                        errorMessage: error.message,
+                        errorName: error.name,
+                        code: code // 记录授权码（可能需要部分隐藏保护隐私）
+                  });
                   throw new Error('获取访问令牌失败');
             }
       }
