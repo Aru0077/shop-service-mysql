@@ -4,6 +4,7 @@ import { asyncHandler } from '../../utils/http.utils';
 import { AppError } from '../../utils/http.utils';
 import { facebookAuthService } from '../../services/facebook.service';
 import { redisClient } from '../../config';
+import { logger } from '../../utils/logger';
 
 export const facebookController = {
     /**
@@ -52,8 +53,17 @@ export const facebookController = {
                 token: authResult.token,
                 user: authResult.user
             }, '登录成功');
-        } catch (error) {
-            console.error('Facebook登录失败:', error);
+
+            logger.info('Facebook登录成功', {
+                userId: authResult.user.id,
+                facebookId: facebookUser.id
+            });
+        } catch (error: any) {
+            logger.error('Facebook登录失败', {
+                error: error.message,
+                code,
+                stack: error.stack
+            });
             throw new AppError(500, 'fail', '登录处理失败');
         }
     }),
@@ -93,8 +103,16 @@ export const facebookController = {
                 token: authResult.token,
                 user: authResult.user
             }, '登录成功');
-        } catch (error) {
-            console.error('Facebook令牌登录失败:', error);
+
+            logger.info('Facebook令牌登录成功', {
+                userId: authResult.user.id,
+                facebookId: facebookUser.id
+            });
+        } catch (error: any) {
+            logger.error('Facebook令牌登录失败', {
+                error: error.message,
+                stack: error.stack
+            });
             throw new AppError(500, 'fail', '登录处理失败');
         }
     })
