@@ -49,7 +49,7 @@ export const facebookController = {
             );
 
             // 重定向回前端，附带成功消息和令牌
-            return res.redirect(`https://www.uni-mall-mn.shop/auth/login-success?token=${authResult.token}&userId=${authResult.user.id}`);
+            return res.redirect(`https://www.uni-mall-mn.shop/auth/login-success?token=${authResult.token}&userId=${authResult.user.id}&username=${authResult.user.username}`);
         } catch (error: any) {
             logger.error('Facebook登录失败', {
                 errorMessage: error.message,
