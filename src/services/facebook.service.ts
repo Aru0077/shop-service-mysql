@@ -149,9 +149,8 @@ export class FacebookAuthService {
 
                   // 2. 如果没找到用户，创建新用户
                   if (!user) {
-                        // 使用 Facebook name 和 ID 生成用户名
-                        const baseName = name.replace(/\s+/g, '_').toLowerCase();
-                        const username = `${baseName}_${facebookId.substring(0, 8)}`;
+                        // 直接使用 Facebook name 作为用户名
+                        const username = name;
 
                         // 检查用户名是否已存在
                         const existingUser = await prisma.user.findUnique({
@@ -160,7 +159,7 @@ export class FacebookAuthService {
 
                         // 如果用户名已存在，添加随机后缀
                         const finalUsername = existingUser
-                              ? `${baseName}_${Math.floor(Math.random() * 10000)}`
+                              ? `${name}_${Math.floor(Math.random() * 10000)}`
                               : username;
 
                         // 创建新用户
