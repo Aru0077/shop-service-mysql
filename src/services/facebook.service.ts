@@ -4,6 +4,7 @@ import { prisma } from '../config';
 import { sign } from 'jsonwebtoken';
 import { logger } from '../utils/logger';
 import crypto from 'crypto';
+import { redisClient } from '../config';
 
 export class FacebookAuthService {
       private appId: string;
@@ -40,6 +41,9 @@ export class FacebookAuthService {
        */
       public getLoginUrl(): string {
             const state = crypto.randomBytes(16).toString('hex');
+            // 将state保存到Redis，用于验证回调
+            redisClient.setEx(`facebook:state:${state}`, 600, '1');
+
             const scopes = ['public_profile'];
 
             return `https://www.facebook.com/${this.apiVersion}/dialog/oauth?` +
