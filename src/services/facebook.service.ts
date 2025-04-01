@@ -37,67 +37,6 @@ export class FacebookAuthService {
       }
 
       /**
-       * 获取Facebook登录URL
-       */
-      public getLoginUrl(): string {
-            const state = crypto.randomBytes(16).toString('hex');
-            // 将state保存到Redis，用于验证回调
-            redisClient.setEx(`facebook:state:${state}`, 600, '1');
-
-            const scopes = ['public_profile'];
-
-            return `https://www.facebook.com/${this.apiVersion}/dialog/oauth?` +
-                  `client_id=${this.appId}` +
-                  `&redirect_uri=${encodeURIComponent(this.redirectUri)}` +
-                  `&scope=${encodeURIComponent(scopes.join(','))}` +
-                  `&state=${state}` +
-                  `&response_type=code`;
-      }
-
-      /**
-       * 通过授权码获取访问令牌
-       */
-      public async getAccessToken(code: string): Promise<string> {
-            try {
-                  // 日志记录请求参数（不含敏感信息）
-                  logger.info('正在请求Facebook访问令牌', {
-                        apiVersion: this.apiVersion,
-                        redirectUri: this.redirectUri
-                  });
-
-                  // 使用 POST 而非 GET，避免 URL 长度限制
-                  const response = await axios.post(
-                        `https://graph.facebook.com/${this.apiVersion}/oauth/access_token`,
-                        null, // POST 请求体为空
-                        {
-                              params: {
-                                    client_id: this.appId,
-                                    client_secret: this.appSecret,
-                                    redirect_uri: this.redirectUri,
-                                    code: code
-                              }
-                        }
-                  );
-
-                  logger.info('Facebook访问令牌获取成功');
-                  return response.data.access_token;
-            } catch (error: any) {
-                  // 增强错误记录，捕获更多详细信息
-                  const errorData = error.response?.data || {};
-                  const errorDetails = {
-                        statusCode: error.response?.status,
-                        errorMessage: error.message,
-                        errorName: error.name,
-                        fbError: errorData.error,
-                        redirectUri: this.redirectUri
-                  };
-
-                  logger.error('获取Facebook访问令牌失败', errorDetails);
-                  throw new Error('获取访问令牌失败');
-            }
-      }
-
-      /**
        * 验证Facebook访问令牌
        */
       public async verifyAccessToken(accessToken: string): Promise<boolean> {
