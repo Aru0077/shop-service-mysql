@@ -87,13 +87,16 @@ export const userController = {
             // 将令牌存储到Redis，用于验证和登出
             await redisClient.setEx(`shop:user:${user.id}:token`, TOKEN_EXPIRE_TIME, token);
 
+            // 计算过期时间戳
+            const expiresAt = Math.floor(Date.now() / 1000) + TOKEN_EXPIRE_TIME;
+
             // 返回用户信息和令牌
             const userData = {
                   id: user.id,
                   username: user.username
             };
 
-            res.sendSuccess({ token, user: userData }, '登录成功');
+            res.sendSuccess({ token, user: userData, expiresAt }, '登录成功');
       }),
 
       // 退出登录

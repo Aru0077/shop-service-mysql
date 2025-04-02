@@ -37,10 +37,14 @@ export const facebookController = {
                 authResult.token
             );
 
+            // 计算过期时间戳
+            const expiresAt = Math.floor(Date.now() / 1000) + 24 * 60 * 60;
+
             // 返回用户信息和令牌
             res.sendSuccess({
                 token: authResult.token,
-                user: authResult.user
+                user: authResult.user,
+                expiresAt
             }, '登录成功');
 
             logger.info('Facebook令牌登录成功', {
