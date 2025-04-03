@@ -73,7 +73,7 @@ export const qpayController = {
 
             // 创建QPay发票
             const invoiceDescription = `Order #${order.orderNo}`;
-            const callbackUrl = `${process.env.QPAY_CALLBACK_URL}?orderId=${orderId}`;
+            const callbackUrl = `${process.env.QPAY_CALLBACK_URL}?payment_id=${orderId}`;
 
             const invoice = await qpayService.createInvoice(
                   order.paymentAmount,
@@ -219,23 +219,23 @@ export const qpayController = {
 
       // 处理QPay回调
       handleCallback: asyncHandler(async (req: Request, res: Response) => {
-            const { orderId, payment_id } = req.query;
+            const { payment_id } = req.query;
 
-            if (!orderId) {
-                  logger.error('QPay回调缺少orderId', { query: req.query });
-                  return res.status(400).send('Missing order ID');
+            if (!payment_id) {
+                  logger.error('QPay回调缺少payment_id', { query: req.query });
+                  return res.status(400).send('Missing payment_id');
             }
 
             // 记录回调信息
-            logger.info('收到QPay支付回调', { orderId, payment_id, query: req.query });
+            logger.info('收到QPay支付回调', {  payment_id, query: req.query });
 
             // 验证订单是否存在
             const order = await prisma.order.findUnique({
-                  where: { id: orderId as string }
+                  where: { id: payment_id as string }
             });
 
             if (!order) {
-                  logger.error('QPay回调订单不存在', { orderId });
+                  logger.error('QPay回调订单不存在', { payment_id });
                   return res.status(404).send('Order not found');
             }
 
@@ -247,7 +247,7 @@ export const qpayController = {
             // 记录回调数据
             await prisma.qPayCallback.create({
                   data: {
-                        orderId: orderId as string,
+                        orderId: payment_id as string,
                         paymentId: payment_id as string || null,
                         callbackData: JSON.stringify(req.query),
                         status: 'RECEIVED'
@@ -263,7 +263,7 @@ export const qpayController = {
                         if (paymentDetails && paymentDetails.payment_status === 'PAID') {
                               // 处理订单支付
                               await orderService.processOrderPayment(
-                                    orderId as string,
+                                    payment_id as string,
                                     order.userId,
                                     'qpay',
                                     payment_id as string
@@ -271,14 +271,14 @@ export const qpayController = {
 
                               // 更新发票状态
                               await prisma.qPayInvoice.updateMany({
-                                    where: { orderId: orderId as string },
+                                    where: { orderId: payment_id as string },
                                     data: { status: 'PAID', paymentId: payment_id as string }
                               });
 
                               const callback = await prisma.qPayCallback.findFirst({
-                                    where: { orderId: orderId as string }
+                                    where: { orderId: payment_id as string }
                               });
-                              
+
                               // 更新回调状态
                               if (callback) {
                                     await prisma.qPayCallback.update({
@@ -290,11 +290,11 @@ export const qpayController = {
                               return res.status(200).send('Payment processed successfully');
                         }
                   } catch (error) {
-                        logger.error('处理QPay回调失败', { error, orderId, payment_id });
+                        logger.error('处理QPay回调失败', { error, payment_id });
 
                         // 更新回调状态
                         await prisma.qPayCallback.update({
-                              where: { id: orderId as string },
+                              where: { id: payment_id as string },
                               data: { status: 'FAILED', error: JSON.stringify(error) }
                         });
 
