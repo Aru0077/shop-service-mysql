@@ -81,6 +81,7 @@ class QPayService {
 
                                     // 获取新令牌
                                     const token = await this.getAccessToken();
+                                    
 
                                     // 更新请求头
                                     originalRequest.headers.Authorization = `Bearer ${token}`;
