@@ -83,11 +83,18 @@ export const qpayController = {
             );
 
             if (!invoice) {
+                  // 添加更多的日志记录
+                  logger.error('创建QPay发票返回null', {
+                        orderId,
+                        orderNo: order.orderNo,
+                        amount: order.paymentAmount,
+                        callbackUrl
+                  });
                   throw new AppError(500, 'fail', '创建支付发票失败，请稍后重试');
             }
 
             console.log('QPay发票创建成功', invoice);
-            
+
             // 保存发票信息
             await prisma.qPayInvoice.create({
                   data: {
@@ -96,7 +103,7 @@ export const qpayController = {
                         qrImage: invoice.qr_image,
                         qrText: invoice.qr_text,
                         qPayShortUrl: invoice.qPay_shortUrl || null,
-                        urls: invoice.urls,  
+                        urls: invoice.urls,
                         status: 'PENDING',
                         expiresAt: new Date(Date.now() + 30 * 60 * 1000) // 30分钟有效期
                   }
@@ -108,7 +115,7 @@ export const qpayController = {
                   qrImage: invoice.qr_image || null,
                   qrText: invoice.qr_text || null,
                   qPayShortUrl: invoice.qPay_shortUrl || null,
-                  urls: invoice.urls || null,  
+                  urls: invoice.urls || null,
                   orderId
             });
       }),
@@ -268,11 +275,17 @@ export const qpayController = {
                                     data: { status: 'PAID', paymentId: payment_id as string }
                               });
 
-                              // 更新回调状态
-                              await prisma.qPayCallback.update({
-                                    where: { id: orderId as string },
-                                    data: { status: 'PROCESSED' }
+                              const callback = await prisma.qPayCallback.findFirst({
+                                    where: { orderId: orderId as string }
                               });
+                              
+                              // 更新回调状态
+                              if (callback) {
+                                    await prisma.qPayCallback.update({
+                                          where: { id: callback.id },
+                                          data: { status: 'PROCESSED' }
+                                    });
+                              }
 
                               return res.status(200).send('Payment processed successfully');
                         }

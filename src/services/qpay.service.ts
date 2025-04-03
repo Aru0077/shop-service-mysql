@@ -39,7 +39,7 @@ class QPayService {
             // 创建axios实例
             this.axiosInstance = axios.create({
                   baseURL: this.apiUrl,
-                  timeout: 10000,
+                  timeout: 30000,
                   headers: {
                         'Content-Type': 'application/json'
                   }
@@ -204,7 +204,7 @@ class QPayService {
       ): Promise<QPayInvoiceResponse | null> {
             try {
                   // 使用完整的回调URL，添加订单ID作为查询参数
-                  const callbackUrl = customCallbackUrl || `${this.callbackUrl}?orderId=${orderNo}`;
+                  const callbackUrl = customCallbackUrl || `${this.callbackUrl}?payment_id=${orderNo}`;
 
                   // 准备发票请求数据
                   const invoiceData: QPayInvoiceRequest = {
@@ -212,7 +212,7 @@ class QPayService {
                         sender_invoice_no: orderNo,
                         invoice_receiver_code: 'terminal',
                         invoice_description: description,
-                        sender_branch_code: 'BRANCH1',
+                        // sender_branch_code: 'BRANCH1',
                         amount,
                         callback_url: callbackUrl
                   };
@@ -223,13 +223,24 @@ class QPayService {
                         invoiceData
                   );
 
+                  logger.info('QPay发票创建结果',  response.data);
+
+
                   // 缓存发票信息，用于后续状态查询
                   const invoiceKey = `qpay:invoice:${orderNo}`;
                   await redisClient.setEx(invoiceKey, 3600, JSON.stringify(response.data));
 
                   return response.data;
-            } catch (error) {
-                  logger.error('创建QPay发票失败', { error, orderNo });
+            } catch (error: any) {
+                  // 更详细地记录错误
+                  const errorDetails = {
+                        message: error.message || '未知错误',
+                        name: error.name,
+                        stack: error.stack,
+                        response: error.response?.data, // 捕获API响应中的错误信息
+                        orderNo
+                  };
+                  logger.error('创建QPay发票失败', errorDetails);
                   return null;
             }
       }
