@@ -39,7 +39,7 @@ class QPayService {
             // 创建axios实例
             this.axiosInstance = axios.create({
                   baseURL: this.apiUrl,
-                  timeout: 30000,
+                  timeout: 60000,
                   headers: {
                         'Content-Type': 'application/json'
                   }
@@ -81,7 +81,7 @@ class QPayService {
 
                                     // 获取新令牌
                                     const token = await this.getAccessToken();
-                                    
+
 
                                     // 更新请求头
                                     originalRequest.headers.Authorization = `Bearer ${token}`;
@@ -213,7 +213,7 @@ class QPayService {
                         sender_invoice_no: orderNo,
                         invoice_receiver_code: 'terminal',
                         invoice_description: description,
-                        // sender_branch_code: 'BRANCH1',
+                        sender_branch_code: 'BRANCH1',
                         amount,
                         callback_url: callbackUrl
                   };
@@ -224,7 +224,7 @@ class QPayService {
                         invoiceData
                   );
 
-                  logger.info('QPay发票创建结果',  response.data);
+                  logger.info('QPay发票创建结果', response.data);
 
 
                   // 缓存发票信息，用于后续状态查询
@@ -235,10 +235,12 @@ class QPayService {
             } catch (error: any) {
                   // 更详细地记录错误
                   const errorDetails = {
-                        message: error.message || '未知错误',
-                        name: error.name,
-                        stack: error.stack,
-                        response: error.response?.data, // 捕获API响应中的错误信息
+                        message: error.message,
+                        code: error.code,
+                        response: error.response?.data, // 捕获QPay返回的具体错误信息
+                        status: error.response?.status,
+                        headers: error.response?.headers,  
+                        requestUrl: `${this.apiUrl}/invoice`,
                         orderNo
                   };
                   logger.error('创建QPay发票失败', errorDetails);
