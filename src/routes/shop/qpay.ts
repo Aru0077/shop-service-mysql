@@ -2,32 +2,36 @@
 import { Router } from 'express';
 import { qpayController } from '../../controllers/shop/qpay.controller';
 import { validateRequest } from '../../middlewares/validateResult';
+import {
+      createQPaySchema,
+      checkPaymentStatusSchema,
+      qpayCallbackSchema
+} from '../../validators/shop/qpay.validator';
 import { shopAuthMiddleware } from '../../middlewares/shopAuth.middleware';
-import { createQPayPaymentSchema, checkQPayStatusSchema } from '../../validators/shop/qpay.validator';
 
 const router = Router();
 
-// 需要认证的路由
-router.use('/create', shopAuthMiddleware);
-router.use('/status', shopAuthMiddleware);
+// 对callback以外的所有路由应用认证中间件
+router.use(/^(?!.*\/callback).+$/, shopAuthMiddleware);
 
 // 创建QPay支付
 router.post(
       '/create',
-      validateRequest(createQPayPaymentSchema),
+      validateRequest(createQPaySchema),
       qpayController.createPayment
 );
 
 // 检查支付状态
 router.get(
       '/status/:orderId',
-      validateRequest(checkQPayStatusSchema),
+      validateRequest(checkPaymentStatusSchema),
       qpayController.checkPaymentStatus
 );
 
-// 处理QPay回调 - 公开路由，不需要认证
+// QPay回调端点 - 必须公开访问
 router.get(
       '/callback',
+      validateRequest(qpayCallbackSchema),
       qpayController.handleCallback
 );
 
