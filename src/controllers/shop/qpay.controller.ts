@@ -227,7 +227,7 @@ export const qpayController = {
             }
 
             // 记录回调信息
-            logger.info('收到QPay支付回调', {  payment_id, query: req.query });
+            logger.info('收到QPay支付回调', { payment_id, query: req.query });
 
             // 验证订单是否存在
             const order = await prisma.order.findUnique({
@@ -292,11 +292,17 @@ export const qpayController = {
                   } catch (error) {
                         logger.error('处理QPay回调失败', { error, payment_id });
 
-                        // 更新回调状态
-                        await prisma.qPayCallback.update({
-                              where: { id: payment_id as string },
-                              data: { status: 'FAILED', error: JSON.stringify(error) }
+                        const callback = await prisma.qPayCallback.findFirst({
+                              where: { orderId: payment_id as string }
                         });
+
+                        // 更新回调状态
+                        if (callback) {
+                              await prisma.qPayCallback.update({
+                                    where: { id: callback.id },
+                                    data: { status: 'FAILED', error: JSON.stringify(error) }
+                              });
+                        }
 
                         return res.status(500).send('Error processing payment');
                   }

@@ -18,6 +18,11 @@ class QPayService {
       private clientSecret: string;
       private invoiceCode: string;
       private callbackUrl: string;
+      // 添加令牌刷新锁
+      private refreshInProgress: boolean = false;
+      private refreshPromise: Promise<string | null> | null = null;
+      private lastAuthFailure: number = 0;
+      private failureCount: number = 0;
 
       constructor() {
             // 从环境变量获取配置
@@ -68,29 +73,16 @@ class QPayService {
             this.axiosInstance.interceptors.response.use(
                   (response) => response,
                   async (error) => {
-                        // 请求配置
                         const originalRequest = error.config;
-
-                        // 如果是401错误且未重试，尝试刷新令牌并重试
                         if (error.response?.status === 401 && !originalRequest._retry) {
                               originalRequest._retry = true;
 
-                              try {
-                                    // 刷新令牌
-                                    await this.refreshToken();
+                              // 获取新令牌
+                              const token = await this.refreshToken();
 
-                                    // 获取新令牌
-                                    const token = await this.getAccessToken();
-
-
-                                    // 更新请求头
+                              if (token) {
                                     originalRequest.headers.Authorization = `Bearer ${token}`;
-
-                                    // 重试请求
                                     return this.axiosInstance(originalRequest);
-                              } catch (refreshError) {
-                                    logger.error('QPay令牌刷新失败', { error: refreshError });
-                                    return Promise.reject(refreshError);
                               }
                         }
 
@@ -156,18 +148,46 @@ class QPayService {
       /**
        * 刷新访问令牌
        */
-      private async refreshToken(): Promise<boolean> {
-            try {
-                  // 获取刷新令牌
-                  const refreshToken = await redisClient.get('qpay:refresh_token');
+      private async refreshToken(): Promise<string | null> {
+            // 如果已有刷新操作在进行中，等待该操作完成
+            if (this.refreshInProgress) {
+                  if (!this.refreshPromise) {
+                        this.refreshPromise = new Promise(resolve => {
+                              setTimeout(async () => {
+                                    const token = await redisClient.get('qpay:access_token');
+                                    resolve(token);
+                              }, 500); // 短暂等待以获取新令牌
+                        });
+                  }
+                  return this.refreshPromise;
+            }
 
+            // 实现退避策略
+            const now = Date.now();
+            if (now - this.lastAuthFailure < 5000 && this.failureCount > 3) {
+                  // 如果短时间内多次失败，强制等待
+                  const waitTime = Math.min(5000 * Math.pow(2, this.failureCount - 3), 60000);
+                  await new Promise(resolve => setTimeout(resolve, waitTime));
+            }
+
+            try {
+                  this.refreshInProgress = true;
+                  this.refreshPromise = this.doRefreshToken();
+                  return await this.refreshPromise;
+            } finally {
+                  this.refreshInProgress = false;
+                  this.refreshPromise = null;
+            }
+      }
+
+      // 实际执行令牌刷新的方法
+      private async doRefreshToken(): Promise<string | null> {
+            try {
+                  const refreshToken = await redisClient.get('qpay:refresh_token');
                   if (!refreshToken) {
-                        // 如果没有刷新令牌，直接重新认证
-                        await this.authenticate();
-                        return true;
+                        return await this.authenticate();
                   }
 
-                  // 使用刷新令牌获取新的访问令牌
                   const response = await this.axiosInstance.post<QPayAuthResponse>(
                         '/auth/refresh',
                         {},
@@ -179,18 +199,27 @@ class QPayService {
                   );
 
                   const { access_token, expires_in } = response.data;
-
-                  // 缓存新的访问令牌
                   await redisClient.setEx('qpay:access_token', expires_in, access_token);
 
-                  return true;
+                  // 重置失败计数
+                  this.failureCount = 0;
+                  return access_token;
             } catch (error) {
-                  logger.error('QPay令牌刷新失败', { error });
+                  // 记录失败并增加计数
+                  this.lastAuthFailure = Date.now();
+                  this.failureCount++;
 
-                  // 刷新失败，尝试重新认证
-                  await this.authenticate();
+                  logger.error('QPay令牌刷新失败', {
+                        error,
+                        failureCount: this.failureCount
+                  });
 
-                  return false;
+                  // 在多次失败后，不立即尝试认证
+                  if (this.failureCount <= 3) {
+                        return await this.authenticate();
+                  }
+
+                  return null;
             }
       }
 
@@ -239,7 +268,7 @@ class QPayService {
                         code: error.code,
                         response: error.response?.data, // 捕获QPay返回的具体错误信息
                         status: error.response?.status,
-                        headers: error.response?.headers,  
+                        headers: error.response?.headers,
                         requestUrl: `${this.apiUrl}/invoice`,
                         orderNo
                   };
