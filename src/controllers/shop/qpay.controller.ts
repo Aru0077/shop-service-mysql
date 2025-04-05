@@ -73,6 +73,8 @@ export const qpayController = {
                   const orderId = req.query.order_id as string;
                   const callbackData = req.body;
 
+                  logger.info('QPay回调内容', { orderId, callbackData });
+
                   if (!orderId) {
                         logger.error('QPay回调缺少order_id参数', { query: req.query });
                         return res.status(200).send('SUCCESS'); // 仍然返回成功以确认收到

@@ -28,10 +28,10 @@ router.get(
       qpayController.checkPaymentStatus
 );
 
-// QPay回调端点 - 必须公开访问
+// QPay回调端点 - 必须公开访问 
+// validateRequest(qpayCallbackSchema),
 router.get(
       '/callback',
-      validateRequest(qpayCallbackSchema),
       qpayController.handleCallback
 );
 
