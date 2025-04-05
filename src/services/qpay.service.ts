@@ -270,10 +270,10 @@ class QPayService {
                   if (callback) {
                         // 已经处理过回调，返回支付完成
                         return {
-                              isPaid: true,
-                              paymentId: callback.paymentId,
-                              callbackData: JSON.parse(callback.callbackData),
-                              processedAt: callback.createdAt
+                              status: 'PAID', // 使用枚举值而非isPaid
+                              message: '支付成功',
+                              orderId,
+                              paymentId: callback.paymentId
                         };
                   }
 
@@ -290,10 +290,10 @@ class QPayService {
 
                   if (failedCallback) {
                         return {
-                              isPaid: false,
-                              isFailed: true,
+                              status: 'CANCELLED', // 使用枚举值
                               message: '支付处理失败',
-                              lastAttempt: failedCallback.createdAt
+                              orderId,
+                              paymentId: failedCallback.paymentId
                         };
                   }
 
@@ -316,18 +316,19 @@ class QPayService {
                               data: { status: 'EXPIRED' }
                         });
                         return {
-                              isPaid: false,
-                              isExpired: true,
-                              message: '支付已过期'
+                              status: 'EXPIRED', // 使用枚举值
+                              message: '支付已过期',
+                              orderId,
+                              invoiceId: invoice.invoiceId
                         };
                   }
 
                   // 只返回等待支付状态，不调用QPay API
                   return {
-                        isPaid: false,
-                        isExpired: false,
+                        status: 'PENDING', // 使用枚举值
                         message: '等待支付中',
-                        expiresAt: invoice.expiresAt
+                        orderId,
+                        invoiceId: invoice.invoiceId
                   };
             } catch (error: any) {
                   logger.error('检查QPay支付状态失败', { error: error.message, orderId });
