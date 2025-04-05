@@ -6,10 +6,10 @@ import { logger } from '../utils/logger';
 import { orderQueue } from '../queues/order.queue';
 
 // QPay配置常量
-const QPAY_HOST = process.env.QPAY_HOST || 'https://merchant.qpay.mn';
-const QPAY_CLIENT_ID = process.env.QPAY_CLIENT_ID || 'TEST_MERCHANT';
-const QPAY_CLIENT_SECRET = process.env.QPAY_CLIENT_SECRET || 'WBDUzy8n';
-const QPAY_INVOICE_CODE = process.env.QPAY_INVOICE_CODE || 'TEST_INVOICE';
+const QPAY_API_URL = process.env.QPAY_API_URL || 'https://merchant.qpay.mn/v2';
+const QPAY_CLIENT_ID = process.env.QPAY_CLIENT_ID || 'LINING';
+const QPAY_CLIENT_SECRET = process.env.QPAY_CLIENT_SECRET || '9tdHUEtK';
+const QPAY_INVOICE_CODE = process.env.QPAY_INVOICE_CODE || 'LINING_INVOICE';
 const QPAY_CALLBACK_URL = process.env.QPAY_CALLBACK_URL || 'https://api.uni-mall-mn.shop/v1/shop/qpay/callback';
 
 // Redis缓存键
@@ -37,6 +37,26 @@ class QPayService {
                         return cachedToken;
                   }
 
+                  // 检查是否有刷新令牌可用
+                  const refreshToken = await redisClient.get('qpay:refresh_token');
+                  if (refreshToken) {
+                        logger.info('尝试使用刷新令牌获取新访问令牌');
+                        try {
+                              // 尝试刷新令牌
+                              const result = await this.refreshAccessToken(refreshToken);
+                              logger.info('成功通过刷新令牌获取新访问令牌');
+                              return result.accessToken;
+                        } catch (refreshError: any) {
+                              // 刷新失败，记录日志
+                              logger.warn('刷新令牌失败，将尝试重新获取令牌', {
+                                    error: refreshError.message
+                              });
+                              // 刷新失败后删除刷新令牌避免重复尝试
+                              await redisClient.del('qpay:refresh_token');
+                              // 继续执行原有的获取令牌流程
+                        }
+                  }
+
                   // 实现重试逻辑
                   while (retryCount < MAX_TOKEN_RETRY) {
                         // 尝试获取令牌刷新锁
@@ -55,7 +75,7 @@ class QPayService {
                                     });
 
                                     const response = await axios.post(
-                                          `${QPAY_HOST}/v2/auth/token`,
+                                          `${QPAY_API_URL}/auth/token`,
                                           {},
                                           {
                                                 auth: {
@@ -75,15 +95,44 @@ class QPayService {
 
                                     // 提取响应中的令牌
                                     const token = response.data.access_token;
+                                    const refreshToken = response.data.refresh_token;
+                                    const expiresIn = response.data.expires_in;
+                                    const refreshExpiresIn = response.data.refresh_expires_in;
+
                                     if (!token) {
                                           logger.error('QPay未返回有效的访问令牌', { response: response.data });
                                           throw new Error('QPay未返回有效的访问令牌');
                                     }
 
-                                    // 缓存令牌
-                                    await redisClient.setEx(QPAY_TOKEN_KEY, QPAY_TOKEN_EXPIRY, token);
+                                    // 计算相对过期时间（将时间戳转换为相对秒数）
+                                    const now = Math.floor(Date.now() / 1000);
 
-                                    logger.info('成功获取并缓存QPay访问令牌');
+                                    // 访问令牌缓存时间（提前5分钟过期）
+                                    let tokenExpiry = QPAY_TOKEN_EXPIRY; // 默认值
+                                    if (expiresIn && expiresIn > now) {
+                                          tokenExpiry = expiresIn - now - 300; // 提前5分钟过期
+                                    }
+
+                                    // 刷新令牌缓存时间
+                                    let refreshExpiry = QPAY_TOKEN_EXPIRY * 2; // 默认值
+                                    if (refreshExpiresIn && refreshExpiresIn > now) {
+                                          refreshExpiry = refreshExpiresIn - now;
+                                    }
+
+                                    // 缓存访问令牌
+                                    await redisClient.setEx(QPAY_TOKEN_KEY, tokenExpiry, token);
+
+                                    // 如果有刷新令牌，也缓存它
+                                    if (refreshToken) {
+                                          await redisClient.setEx('qpay:refresh_token', refreshExpiry, refreshToken);
+                                          logger.info('成功获取并缓存QPay访问令牌和刷新令牌', {
+                                                tokenExpiry,
+                                                refreshExpiry
+                                          });
+                                    } else {
+                                          logger.info('成功获取并缓存QPay访问令牌（无刷新令牌）');
+                                    }
+
                                     return token;
                               } finally {
                                     // 释放锁
@@ -117,6 +166,57 @@ class QPayService {
                         retries: retryCount
                   });
                   throw new Error(`获取QPay访问令牌失败: ${error.message}`);
+            }
+      }
+
+      async refreshAccessToken(refreshToken: string): Promise<any> {
+            try {
+                  logger.info('开始刷新QPay访问令牌');
+
+                  const response = await axios.post(
+                        `${QPAY_API_URL}/auth/refresh`,
+                        { refresh_token: refreshToken },
+                        {
+                              headers: {
+                                    'Content-Type': 'application/json'
+                              }
+                        }
+                  );
+
+                  logger.info('QPay令牌刷新成功');
+
+                  // 缓存新令牌
+                  const newToken = response.data.access_token;
+                  const newRefreshToken = response.data.refresh_token;
+                  const expiresIn = response.data.expires_in;
+                  const refreshExpiresIn = response.data.refresh_expires_in;
+
+                  // 计算相对过期时间
+                  const now = Math.floor(Date.now() / 1000);
+
+                  // 设置过期时间（同 getAccessToken 方法）
+                  let tokenExpiry = QPAY_TOKEN_EXPIRY; // 默认值
+                  if (expiresIn && expiresIn > now) {
+                        tokenExpiry = expiresIn - now - 300;
+                  }
+
+                  let refreshExpiry = QPAY_TOKEN_EXPIRY * 2; // 默认值
+                  if (refreshExpiresIn && refreshExpiresIn > now) {
+                        refreshExpiry = refreshExpiresIn - now;
+                  }
+
+
+                  // 存储令牌和刷新令牌
+                  await redisClient.setEx(QPAY_TOKEN_KEY, tokenExpiry, newToken);
+                  await redisClient.setEx('qpay:refresh_token', refreshExpiry, newRefreshToken);
+
+                  return {
+                        accessToken: newToken,
+                        refreshToken: newRefreshToken
+                  };
+            } catch (error: any) {
+                  logger.error('刷新QPay令牌失败', { error: error.message });
+                  throw new Error(`刷新QPay令牌失败: ${error.message}`);
             }
       }
 
@@ -218,7 +318,7 @@ class QPayService {
 
                   // 6. 调用QPay API创建发票
                   const response = await axios.post(
-                        `${QPAY_HOST}/v2/invoice`,
+                        `${QPAY_API_URL}/invoice`,
                         payload,
                         {
                               headers: {
@@ -582,7 +682,7 @@ class QPayService {
 
                   // 调用QPay API取消发票
                   const response = await axios.delete(
-                        `${QPAY_HOST}/v2/invoice/${invoiceId}`,
+                        `${QPAY_API_URL}/invoice/${invoiceId}`,
                         {
                               headers: {
                                     'Authorization': `Bearer ${token}`
