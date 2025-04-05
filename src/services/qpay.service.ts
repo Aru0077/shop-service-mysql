@@ -143,36 +143,66 @@ class QPayService {
                         throw new Error('订单状态不允许支付');
                   }
 
-                  // 检查是否已存在发票
-                  const existingInvoice = await prisma.qPayInvoice.findFirst({
+                  // 1. 首先检查是否存在未过期的待支付发票
+                  const now = new Date();
+                  const existingValidInvoice = await prisma.qPayInvoice.findFirst({
                         where: {
                               orderId,
-                              status: 'PENDING'
+                              status: 'PENDING',
+                              expiresAt: {
+                                    gt: now // 确保未过期
+                              }
                         }
                   });
 
-                  if (existingInvoice) {
+                  if (existingValidInvoice) {
+                        logger.info(`使用订单 ${orderId} 的现有未过期发票`, { invoiceId: existingValidInvoice.invoiceId });
                         // 返回现有发票信息
                         return {
-                              invoiceId: existingInvoice.invoiceId,
-                              qrImage: existingInvoice.qrImage,
-                              qrText: existingInvoice.qrText,
-                              qPayShortUrl: existingInvoice.qPayShortUrl,
-                              urls: existingInvoice.urls,
-                              expiresAt: existingInvoice.expiresAt
+                              invoiceId: existingValidInvoice.invoiceId,
+                              qrImage: existingValidInvoice.qrImage,
+                              qrText: existingValidInvoice.qrText,
+                              qPayShortUrl: existingValidInvoice.qPayShortUrl,
+                              urls: existingValidInvoice.urls,
+                              expiresAt: existingValidInvoice.expiresAt
                         };
                   }
 
-                  // 获取QPay令牌
+                  // 2. 更新已过期但仍为PENDING的发票状态
+                  const expiredInvoices = await prisma.qPayInvoice.findMany({
+                        where: {
+                              orderId,
+                              status: 'PENDING',
+                              expiresAt: {
+                                    lte: now
+                              }
+                        }
+                  });
+
+                  if (expiredInvoices.length > 0) {
+                        logger.info(`将订单 ${orderId} 的过期发票更新为EXPIRED状态`, { count: expiredInvoices.length });
+                        await prisma.qPayInvoice.updateMany({
+                              where: {
+                                    id: {
+                                          in: expiredInvoices.map(inv => inv.id)
+                                    }
+                              },
+                              data: {
+                                    status: 'EXPIRED'
+                              }
+                        });
+                  }
+
+                  // 3. 获取QPay令牌
                   const token = await this.getAccessToken();
 
-                  // 准备带订单ID的回调URL
+                  // 4. 准备带订单ID的回调URL
                   const callbackUrl = `${QPAY_CALLBACK_URL}?order_id=${orderId}`;
 
-                  // 创建发票payload
+                  // 5. 创建发票payload
                   const payload = {
                         invoice_code: QPAY_INVOICE_CODE,
-                        sender_invoice_no: `${order.orderNo}`, // 必须唯一
+                        sender_invoice_no: `${order.orderNo}_${Date.now().toString().substring(8)}`, // 添加时间戳后缀确保唯一性
                         invoice_receiver_code: "terminal",
                         invoice_description: `Payment for order ${order.orderNo}`,
                         amount: order.paymentAmount,
@@ -186,7 +216,7 @@ class QPayService {
                         requestTime: new Date().toISOString()
                   });
 
-                  // 调用QPay API创建发票
+                  // 6. 调用QPay API创建发票
                   const response = await axios.post(
                         `${QPAY_HOST}/v2/invoice`,
                         payload,
@@ -209,7 +239,7 @@ class QPayService {
                         throw new Error('创建QPay发票失败');
                   }
 
-                  // 提取发票信息
+                  // 7. 提取发票信息
                   const invoiceData = {
                         invoiceId: response.data.invoice_id,
                         qrImage: response.data.qr_image,
@@ -218,11 +248,11 @@ class QPayService {
                         urls: response.data.urls
                   };
 
-                  // 计算过期时间（通常为15分钟）
+                  // 8. 计算过期时间（通常为15分钟）
                   const expiresAt = new Date();
                   expiresAt.setMinutes(expiresAt.getMinutes() + 15);
 
-                  // 将发票保存到数据库
+                  // 9. 将发票保存到数据库
                   await prisma.qPayInvoice.create({
                         data: {
                               orderId,
@@ -236,9 +266,9 @@ class QPayService {
                         }
                   });
 
-                  logger.info(`为订单 ${orderId} 创建了QPay发票`, { invoiceId: invoiceData.invoiceId });
+                  logger.info(`为订单 ${orderId} 创建了新的QPay发票`, { invoiceId: invoiceData.invoiceId });
 
-                  // 添加过期时间到响应
+                  // 10. 添加过期时间到响应
                   return {
                         ...invoiceData,
                         expiresAt
