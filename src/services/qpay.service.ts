@@ -17,70 +17,105 @@ const QPAY_TOKEN_KEY = 'qpay:token';
 const QPAY_TOKEN_LOCK_KEY = 'qpay:token:lock';
 const QPAY_TOKEN_EXPIRY = 86400; // 24小时缓存
 
+const MAX_TOKEN_RETRY = 3;
+
 class QPayService {
       /**
-       * 获取QPay访问令牌，带缓存和并发控制
+       * 获取QPay访问令牌，带缓存、并发控制和重试限制
        * @returns 访问令牌
        */
       async getAccessToken(): Promise<string> {
+            // 最大重试次数常量
+            const MAX_TOKEN_RETRY = 3;
+            let retryCount = 0;
+
             try {
                   // 先尝试从缓存获取令牌
                   const cachedToken = await redisClient.get(QPAY_TOKEN_KEY);
                   if (cachedToken) {
+                        logger.info('使用缓存的QPay访问令牌');
                         return cachedToken;
                   }
 
-                  // 尝试获取令牌刷新锁
-                  const lockAcquired = await redisClient.set(QPAY_TOKEN_LOCK_KEY, '1', {
-                        NX: true,
-                        EX: 30 // 30秒锁定时间
-                  });
+                  // 实现重试逻辑
+                  while (retryCount < MAX_TOKEN_RETRY) {
+                        // 尝试获取令牌刷新锁
+                        const lockAcquired = await redisClient.set(QPAY_TOKEN_LOCK_KEY, '1', {
+                              NX: true,
+                              EX: 30 // 30秒锁定时间
+                        });
 
-                  if (!lockAcquired) {
-                        // 其他请求正在刷新令牌，等待后重试
+                        if (lockAcquired) {
+                              try {
+                                    // 调用API获取令牌
+                                    logger.info('开始请求QPay访问令牌', {
+                                          clientId: QPAY_CLIENT_ID,
+                                          requestTime: new Date().toISOString(),
+                                          attempt: retryCount + 1
+                                    });
+
+                                    const response = await axios.post(
+                                          `${QPAY_HOST}/v2/auth/token`,
+                                          {},
+                                          {
+                                                auth: {
+                                                      username: QPAY_CLIENT_ID,
+                                                      password: QPAY_CLIENT_SECRET
+                                                },
+                                                headers: {
+                                                      'Content-Type': 'application/json'
+                                                }
+                                          }
+                                    );
+
+                                    logger.info('QPay访问令牌API响应', {
+                                          status: response.status,
+                                          responseTime: new Date().toISOString()
+                                    });
+
+                                    // 提取响应中的令牌
+                                    const token = response.data.access_token;
+                                    if (!token) {
+                                          logger.error('QPay未返回有效的访问令牌', { response: response.data });
+                                          throw new Error('QPay未返回有效的访问令牌');
+                                    }
+
+                                    // 缓存令牌
+                                    await redisClient.setEx(QPAY_TOKEN_KEY, QPAY_TOKEN_EXPIRY, token);
+
+                                    logger.info('成功获取并缓存QPay访问令牌');
+                                    return token;
+                              } finally {
+                                    // 释放锁
+                                    logger.info('释放QPay令牌锁');
+                                    await redisClient.del(QPAY_TOKEN_LOCK_KEY);
+                              }
+                        }
+
+                        // 锁获取失败，重试
+                        logger.info(`等待获取QPay令牌锁，重试次数: ${retryCount + 1}/${MAX_TOKEN_RETRY}`);
                         await new Promise(resolve => setTimeout(resolve, 1000));
-                        // 检查等待期间是否已刷新令牌
+
+                        // 重试前再次检查是否已缓存令牌
                         const refreshedToken = await redisClient.get(QPAY_TOKEN_KEY);
                         if (refreshedToken) {
+                              logger.info('等待期间已获取到QPay令牌');
                               return refreshedToken;
                         }
-                        // 仍无令牌，抛出错误
-                        throw new Error('无法获取QPay令牌，请稍后再试');
+
+                        retryCount++;
                   }
 
-                  try {
-                        // 调用API获取令牌
-                        const response = await axios.post(
-                              `${QPAY_HOST}/v2/auth/token`,
-                              {},
-                              {
-                                    auth: {
-                                          username: QPAY_CLIENT_ID,
-                                          password: QPAY_CLIENT_SECRET
-                                    },
-                                    headers: {
-                                          'Content-Type': 'application/json'
-                                    }
-                              }
-                        );
-
-                        // 提取响应中的令牌
-                        const token = response.data.access_token;
-                        if (!token) {
-                              throw new Error('QPay未返回有效的访问令牌');
-                        }
-
-                        // 缓存令牌
-                        await redisClient.setEx(QPAY_TOKEN_KEY, QPAY_TOKEN_EXPIRY, token);
-
-                        logger.info('成功获取QPay访问令牌');
-                        return token;
-                  } finally {
-                        // 释放锁
-                        await redisClient.del(QPAY_TOKEN_LOCK_KEY);
-                  }
+                  // 超过最大重试次数
+                  logger.error('获取QPay令牌锁失败，已达最大重试次数');
+                  throw new Error('无法获取QPay令牌，请稍后再试');
             } catch (error: any) {
-                  logger.error('获取QPay访问令牌失败', { error: error.message });
+                  logger.error('获取QPay访问令牌失败', {
+                        error: error.message,
+                        stack: error.stack,
+                        requestTime: new Date().toISOString(),
+                        retries: retryCount
+                  });
                   throw new Error(`获取QPay访问令牌失败: ${error.message}`);
             }
       }
@@ -144,6 +179,13 @@ class QPayService {
                         callback_url: callbackUrl
                   };
 
+                  logger.info('开始创建QPay发票', {
+                        orderId,
+                        orderNo: order.orderNo,
+                        amount: payload.amount,
+                        requestTime: new Date().toISOString()
+                  });
+
                   // 调用QPay API创建发票
                   const response = await axios.post(
                         `${QPAY_HOST}/v2/invoice`,
@@ -155,6 +197,13 @@ class QPayService {
                               }
                         }
                   );
+
+                  logger.info('QPay创建发票API响应', {
+                        status: response.status,
+                        invoiceId: response.data.invoice_id,
+                        orderId,
+                        responseTime: new Date().toISOString()
+                  });
 
                   if (!response.data || !response.data.invoice_id) {
                         throw new Error('创建QPay发票失败');
@@ -228,6 +277,26 @@ class QPayService {
                         };
                   }
 
+                  // 检查是否有失败的回调
+                  const failedCallback = await prisma.qPayCallback.findFirst({
+                        where: {
+                              orderId,
+                              status: 'FAILED'
+                        },
+                        orderBy: {
+                              createdAt: 'desc'
+                        }
+                  });
+
+                  if (failedCallback) {
+                        return {
+                              isPaid: false,
+                              isFailed: true,
+                              message: '支付处理失败',
+                              lastAttempt: failedCallback.createdAt
+                        };
+                  }
+
                   // 从数据库获取发票信息
                   const invoice = await prisma.qPayInvoice.findFirst({
                         where: {
@@ -253,50 +322,12 @@ class QPayService {
                         };
                   }
 
-                  // 获取QPay令牌
-                  const token = await this.getAccessToken();
-
-                  // 调用QPay API检查支付状态
-                  const response = await axios.post(
-                        `${QPAY_HOST}/v2/payment/check`,
-                        {
-                              object_type: 'INVOICE',
-                              object_id: invoice.invoiceId,
-                              offset: {
-                                    page_number: 1,
-                                    page_limit: 100
-                              }
-                        },
-                        {
-                              headers: {
-                                    'Authorization': `Bearer ${token}`,
-                                    'Content-Type': 'application/json'
-                              }
-                        }
-                  );
-
-                  // 提取支付信息
-                  const payments = response.data?.rows || [];
-
-                  if (payments.length > 0) {
-                        // 存在支付，处理它
-                        const latestPayment = payments[0];
-
-                        // 记录支付信息
-                        await this.processPayment(orderId, invoice.invoiceId, latestPayment);
-
-                        return {
-                              isPaid: true,
-                              paymentId: latestPayment.payment_id,
-                              paymentData: latestPayment
-                        };
-                  }
-
-                  // 未找到支付
+                  // 只返回等待支付状态，不调用QPay API
                   return {
                         isPaid: false,
                         isExpired: false,
-                        message: '等待支付中'
+                        message: '等待支付中',
+                        expiresAt: invoice.expiresAt
                   };
             } catch (error: any) {
                   logger.error('检查QPay支付状态失败', { error: error.message, orderId });
@@ -313,6 +344,24 @@ class QPayService {
        */
       async processCallback(orderId: string, paymentId: string, callbackData: any): Promise<any> {
             try {
+                  // 幂等性检查：检查是否已有成功处理的回调记录
+                  const existingCallback = await prisma.qPayCallback.findFirst({
+                        where: {
+                              orderId,
+                              paymentId,
+                              status: 'PROCESSED'
+                        }
+                  });
+
+                  if (existingCallback) {
+                        logger.info('QPay回调已处理，跳过重复处理', { orderId, paymentId });
+                        return {
+                              success: true,
+                              message: '支付已处理',
+                              duplicate: true
+                        };
+                  }
+
                   // 将回调记录到数据库
                   const callback = await prisma.qPayCallback.create({
                         data: {
@@ -330,6 +379,13 @@ class QPayService {
 
                   if (!order) {
                         logger.error('处理QPay回调时找不到订单', { orderId, paymentId });
+                        await prisma.qPayCallback.update({
+                              where: { id: callback.id },
+                              data: {
+                                    status: 'FAILED',
+                                    error: '找不到订单'
+                              }
+                        });
                         return {
                               success: false,
                               message: '找不到订单'
@@ -404,13 +460,19 @@ class QPayService {
                         message: '支付成功处理'
                   };
             } catch (error: any) {
-                  logger.error('处理QPay回调失败', { error: error.message, orderId, paymentId });
+                  logger.error('处理QPay回调失败', {
+                        error: error.message,
+                        stack: error.stack,
+                        orderId,
+                        paymentId
+                  });
 
                   // 更新回调状态为失败
                   await prisma.qPayCallback.updateMany({
                         where: {
                               orderId,
-                              paymentId
+                              paymentId,
+                              status: 'RECEIVED' // 只更新未处理的回调
                         },
                         data: {
                               status: 'FAILED',
