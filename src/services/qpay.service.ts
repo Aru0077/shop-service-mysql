@@ -7,8 +7,8 @@ import { orderQueue } from '../queues/order.queue';
 
 // QPay配置常量
 const QPAY_API_URL = process.env.QPAY_API_URL || 'https://merchant.qpay.mn/v2';
-const QPAY_CLIENT_ID = process.env.QPAY_CLIENT_ID || 'LINING';
-const QPAY_CLIENT_SECRET = process.env.QPAY_CLIENT_SECRET || '9tdHUEtK';
+const QPAY_CLIENT_ID = process.env.QPAY_CLIENT_ID || 'LINING2';
+const QPAY_CLIENT_SECRET = process.env.QPAY_CLIENT_SECRET || '9tdHUEtK2';
 const QPAY_INVOICE_CODE = process.env.QPAY_INVOICE_CODE || 'LINING_INVOICE';
 const QPAY_CALLBACK_URL = process.env.QPAY_CALLBACK_URL || 'https://api.uni-mall-mn.shop/v1/shop/qpay/callback';
 
@@ -17,7 +17,6 @@ const QPAY_TOKEN_KEY = 'qpay:token';
 const QPAY_TOKEN_LOCK_KEY = 'qpay:token:lock';
 const QPAY_TOKEN_EXPIRY = 86400; // 24小时缓存
 
-const MAX_TOKEN_RETRY = 3;
 
 class QPayService {
       /**
