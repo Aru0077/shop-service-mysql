@@ -170,6 +170,21 @@ class QPayService {
 
       async refreshAccessToken(refreshToken: string): Promise<any> {
             try {
+                  // 新增：检查刷新令牌是否过期
+        const refreshTokenExpiry = await redisClient.get('qpay:refresh_token:expiry');
+        const now = Math.floor(Date.now() / 1000);
+
+        // 如果存在过期时间且已过期，则直接抛出异常
+        if (refreshTokenExpiry && parseInt(refreshTokenExpiry) <= now) {
+            logger.warn('刷新令牌已过期，将删除并重新获取令牌');
+            // 删除过期的刷新令牌和过期时间
+            await Promise.all([
+                redisClient.del('qpay:refresh_token'),
+                redisClient.del('qpay:refresh_token:expiry')
+            ]);
+            throw new Error('刷新令牌已过期');
+        }
+
                   logger.info('开始刷新QPay访问令牌');
 
                   const response = await axios.post(
@@ -190,8 +205,7 @@ class QPayService {
                   const expiresIn = response.data.expires_in;
                   const refreshExpiresIn = response.data.refresh_expires_in;
 
-                  // 计算相对过期时间
-                  const now = Math.floor(Date.now() / 1000);
+                 
 
                   // 设置过期时间（同 getAccessToken 方法）
                   let tokenExpiry = QPAY_TOKEN_EXPIRY; // 默认值

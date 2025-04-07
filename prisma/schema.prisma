@@ -22,6 +22,7 @@ model QPayInvoice {
   expiresAt  DateTime @map("expires_at")
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @updatedAt @map("updated_at")
+  failedAttempts Int @default(0)
 
   // 关系
   order Order @relation(fields: [orderId], references: [id])

@@ -192,7 +192,9 @@ class OrderScheduleService {
                   const expiredInvoices = await prisma.qPayInvoice.findMany({
                         where: {
                               status: 'PENDING',
-                              expiresAt: { lt: now }
+                              expiresAt: { lt: now },
+                              // 只处理失败尝试次数少于3次的发票
+                              failedAttempts: { lt: 3 }
                         },
                         include: {
                               order: true
@@ -211,12 +213,43 @@ class OrderScheduleService {
                               // 更新发票状态
                               await prisma.qPayInvoice.update({
                                     where: { id: invoice.id },
-                                    data: { status: 'EXPIRED' }
+                                    data: {
+                                          status: 'EXPIRED',
+                                          failedAttempts: 0  // 成功后重置失败计数
+                                    }
                               });
 
                               logger.info(`已过期QPay发票: ${invoice.invoiceId}, 订单: ${invoice.orderId}`);
                         } catch (error) {
-                              logger.error(`处理过期QPay发票失败`, { error, invoiceId: invoice.invoiceId });
+                              // 更新失败尝试次数
+                              await prisma.qPayInvoice.update({
+                                    where: { id: invoice.id },
+                                    data: {
+                                          failedAttempts: { increment: 1 }  // 失败次数加1
+                                    }
+                              });
+
+                              const updatedInvoice = await prisma.qPayInvoice.findUnique({
+                                    where: { id: invoice.id },
+                                    select: { failedAttempts: true }
+                              });
+
+                              // 记录详细的失败信息，包括当前失败次数
+                              logger.error(`处理过期QPay发票失败`, {
+                                    error: error instanceof Error ? error.message : '未知错误',
+                                    invoiceId: invoice.invoiceId,
+                                    failedAttempts: updatedInvoice?.failedAttempts || 0,
+                                    maxAttempts: 3
+                              });
+
+                              // 如果已达到最大尝试次数，记录特别的警告日志
+                              if (updatedInvoice && updatedInvoice.failedAttempts >= 3) {
+                                    logger.warn(`QPay发票 ${invoice.invoiceId} 已达到最大处理尝试次数，将在后续任务中被跳过`, {
+                                          orderId: invoice.orderId,
+                                          failedAttempts: updatedInvoice.failedAttempts
+                                    });
+                              }
+
                         }
                   }
 
