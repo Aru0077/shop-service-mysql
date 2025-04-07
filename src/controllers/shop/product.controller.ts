@@ -679,6 +679,7 @@ export const productController = {
                               detailImages: true,
                               is_promotion: true,
                               categoryId: true,
+                              salesCount: true,
                               category: {
                                     select: {
                                           id: true,
