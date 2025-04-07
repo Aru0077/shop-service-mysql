@@ -445,10 +445,28 @@ class OrderService {
                               shippingAddress: true,
                               orderItems: {
                                     select: {
+                                          id: true,
                                           productName: true,
                                           mainImage: true,
                                           quantity: true,
-                                          unitPrice: true
+                                          unitPrice: true,
+                                          skuId: true,     // 添加skuId
+                                          skuSpecs: true,  // 添加SKU规格信息
+                                          sku: {           // 关联查询SKU表
+                                                select: {
+                                                      id: true,
+                                                      skuCode: true,
+                                                      price: true,
+                                                      promotion_price: true,
+                                                      image: true,
+                                                      sku_specs: {  // 获取SKU规格详情
+                                                            select: {
+                                                                  spec: { select: { name: true } },
+                                                                  specValue: { select: { value: true } }
+                                                            }
+                                                      }
+                                                }
+                                          }
                                     },
                                     take: 5 // 限制最多返回5个订单项
                               }
@@ -491,76 +509,76 @@ class OrderService {
       async processOrderPayment(orderId: string, userId: string, paymentType: string, transactionId: string) {
             // 验证订单
             const order = await prisma.order.findFirst({
-                where: { id: orderId, userId },
-                select: {
-                    id: true,
-                    orderNo: true,
-                    orderStatus: true,
-                    paymentStatus: true,
-                    paymentAmount: true,
-                    orderItems: {
-                        select: {
-                            id: true,
-                            skuId: true,
-                            quantity: true
+                  where: { id: orderId, userId },
+                  select: {
+                        id: true,
+                        orderNo: true,
+                        orderStatus: true,
+                        paymentStatus: true,
+                        paymentAmount: true,
+                        orderItems: {
+                              select: {
+                                    id: true,
+                                    skuId: true,
+                                    quantity: true
+                              }
                         }
-                    }
-                }
+                  }
             });
-        
+
             if (!order) {
-                throw new AppError(404, 'fail', '订单不存在');
+                  throw new AppError(404, 'fail', '订单不存在');
             }
-        
+
             if (order.orderStatus !== OrderStatus.PENDING_PAYMENT) {
-                throw new AppError(400, 'fail', '订单状态不正确，无法支付');
+                  throw new AppError(400, 'fail', '订单状态不正确，无法支付');
             }
-        
+
             // 减少事务中的操作，仅保留关键状态更新
             await prisma.$transaction(async (tx) => {
-                // 创建支付记录
-                await tx.paymentLog.create({
-                    data: {
-                        orderId: order.id,
-                        amount: order.paymentAmount,
-                        paymentType,
-                        transactionId,
-                        status: 1 // 支付成功
-                    }
-                });
-        
-                // 更新订单状态
-                await tx.order.update({
-                    where: { id: order.id },
-                    data: {
-                        orderStatus: OrderStatus.PENDING_SHIPMENT,
-                        paymentStatus: PaymentStatus.PAID
-                    }
-                });
+                  // 创建支付记录
+                  await tx.paymentLog.create({
+                        data: {
+                              orderId: order.id,
+                              amount: order.paymentAmount,
+                              paymentType,
+                              transactionId,
+                              status: 1 // 支付成功
+                        }
+                  });
+
+                  // 更新订单状态
+                  await tx.order.update({
+                        where: { id: order.id },
+                        data: {
+                              orderStatus: OrderStatus.PENDING_SHIPMENT,
+                              paymentStatus: PaymentStatus.PAID
+                        }
+                  });
             });
-        
+
             // 取消订单超时任务
             const cancelOrderKey = `order:${order.id}:auto_cancel`;
             await redisClient.del(cancelOrderKey);
-        
+
             // 使用队列系统处理后续任务，减少内存占用
             await orderQueue.add('processPostPayment', {
-                orderId: order.id,
-                orderNo: order.orderNo,
-                orderItems: order.orderItems
+                  orderId: order.id,
+                  orderNo: order.orderNo,
+                  orderItems: order.orderItems
             }, {
-                attempts: 3,
-                removeOnComplete: true
+                  attempts: 3,
+                  removeOnComplete: true
             });
-        
+
             return {
-                orderId: order.id,
-                orderNo: order.orderNo,
-                paymentStatus: PaymentStatus.PAID,
-                orderStatus: OrderStatus.PENDING_SHIPMENT,
-                transactionId
+                  orderId: order.id,
+                  orderNo: order.orderNo,
+                  paymentStatus: PaymentStatus.PAID,
+                  orderStatus: OrderStatus.PENDING_SHIPMENT,
+                  transactionId
             };
-        }
+      }
 
       // 支付后的异步任务处理
       async processPostPaymentTasks(order: any) {
