@@ -51,7 +51,7 @@ export const cartController = {
                                                 price: true,
                                                 promotion_price: true,
                                                 stock: true,
-                                                image: true 
+                                                image: true
                                           }
                                     }
                               }
@@ -291,6 +291,9 @@ export const cartController = {
             await prisma.userCartItem.delete({
                   where: { id: cartItemId }
             });
+
+            // 添加这一行：使购物车缓存失效
+            await cacheUtils.invalidateModuleCache('cart', userId);
 
             res.sendSuccess(null, '商品已从购物车移除');
       }),
