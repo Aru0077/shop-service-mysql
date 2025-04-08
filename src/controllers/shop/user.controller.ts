@@ -124,16 +124,16 @@ export const userController = {
             const user = await prisma.user.findUnique({
                   where: { id: userId }
             });
-
-            if (!user || !user.password) {
+            // 检查用户是否存在 || !user.password
+            if (!user ) {
                   throw new AppError(404, 'fail', '用户不存在');
             }
 
             // 验证密码
-            const isPasswordValid = await compare(password, user.password);
-            if (!isPasswordValid) {
-                  throw new AppError(401, 'fail', '密码错误');
-            }
+            // const isPasswordValid = await compare(password, user.password);
+            // if (!isPasswordValid) {
+            //       throw new AppError(401, 'fail', '密码错误');
+            // }
 
             // 检查是否有未完成的订单
             const pendingOrders = await prisma.order.findFirst({

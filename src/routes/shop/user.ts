@@ -26,6 +26,7 @@ router.post('/login', loginLimiter, validateRequest(loginSchema), userController
 // 需要认证的路由
 router.use(shopAuthMiddleware);
 router.post('/logout', userController.logout);
-router.delete('/account', validateRequest(deleteAccountSchema), userController.deleteAccount);
+router.delete('/account',  userController.deleteAccount);
+// validateRequest(deleteAccountSchema),
 
 export default router;
