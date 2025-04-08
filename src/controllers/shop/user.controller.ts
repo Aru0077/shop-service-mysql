@@ -112,9 +112,9 @@ export const userController = {
       }),
 
       // 删除账号
+      // 删除账号
       deleteAccount: asyncHandler(async (req: Request, res: Response) => {
             const userId = req.shopUser?.id;
-            const { password } = req.body;
 
             if (!userId) {
                   throw new AppError(401, 'fail', '请先登录');
@@ -124,16 +124,10 @@ export const userController = {
             const user = await prisma.user.findUnique({
                   where: { id: userId }
             });
-            // 检查用户是否存在 || !user.password
-            if (!user ) {
+
+            if (!user) {
                   throw new AppError(404, 'fail', '用户不存在');
             }
-
-            // 验证密码
-            // const isPasswordValid = await compare(password, user.password);
-            // if (!isPasswordValid) {
-            //       throw new AppError(401, 'fail', '密码错误');
-            // }
 
             // 检查是否有未完成的订单
             const pendingOrders = await prisma.order.findFirst({
@@ -149,17 +143,60 @@ export const userController = {
                   throw new AppError(400, 'fail', '您有未完成的订单，暂时无法删除账号');
             }
 
-            // 事务删除用户相关数据
-            await prisma.$transaction([
-                  prisma.userCartItem.deleteMany({ where: { userId } }),
-                  prisma.userFavorite.deleteMany({ where: { userId } }),
-                  prisma.userAddress.deleteMany({ where: { userId } }),
-                  prisma.user.delete({ where: { id: userId } })
-            ]);
+            // 找出用户的所有订单ID
+            const userOrders = await prisma.order.findMany({
+                  where: { userId },
+                  select: { id: true }
+            });
 
-            // 删除Redis中的令牌
-            await redisClient.del(`shop:user:${userId}:token`);
+            const orderIds = userOrders.map(order => order.id);
 
-            res.sendSuccess(null, '账号已成功删除');
+            // 完整事务删除用户相关数据
+            try {
+                  await prisma.$transaction(async (tx) => {
+                        // 1. 先删除与订单相关的数据
+                        if (orderIds.length > 0) {
+                              // 删除QPay发票和回调记录
+                              await tx.qPayInvoice.deleteMany({
+                                    where: { orderId: { in: orderIds } }
+                              });
+
+                              await tx.qPayCallback.deleteMany({
+                                    where: { orderId: { in: orderIds } }
+                              });
+
+                              // 删除支付日志
+                              await tx.paymentLog.deleteMany({
+                                    where: { orderId: { in: orderIds } }
+                              });
+
+                              // 删除订单项
+                              await tx.orderItem.deleteMany({
+                                    where: { orderId: { in: orderIds } }
+                              });
+
+                              // 删除订单
+                              await tx.order.deleteMany({
+                                    where: { id: { in: orderIds } }
+                              });
+                        }
+
+                        // 2. 删除用户其他相关数据
+                        await tx.userCartItem.deleteMany({ where: { userId } });
+                        await tx.userFavorite.deleteMany({ where: { userId } });
+                        await tx.userAddress.deleteMany({ where: { userId } });
+
+                        // 3. 最后删除用户
+                        await tx.user.delete({ where: { id: userId } });
+                  });
+
+                  // 删除Redis中的令牌
+                  await redisClient.del(`shop:user:${userId}:token`);
+
+                  res.sendSuccess(null, '账号已成功删除');
+            } catch (error) {
+                  console.error('删除账号失败:', error);
+                  throw new AppError(500, 'fail', '删除账号失败，请稍后再试');
+            }
       })
 };
