@@ -237,16 +237,50 @@ orderQueue.process('processOrderItems', async (job) => {
 });
 
 // 在队列处理器中处理库存更新
+// 在队列处理器中处理库存更新和销量更新
 orderQueue.process('processPostPayment', async (job) => {
       const { orderId, orderNo, orderItems } = job.data;
 
-      // 异步处理库存实际扣减和销量更新
-      const inventoryTasks = orderItems.map((item:any) =>
-            inventoryService.confirmPreOccupied(item.skuId, item.quantity, orderNo)
-      );
-      await Promise.all(inventoryTasks);
+      try {
+            // 异步处理库存实际扣减
+            const inventoryTasks = orderItems.map((item: any) =>
+                  inventoryService.confirmPreOccupied(item.skuId, item.quantity, orderNo)
+            );
+            await Promise.all(inventoryTasks);
 
-      // 更新销量等其他操作...
+            // 更新销量
+            // 1. 按产品ID分组数量
+            const productQuantities: Record<number, number> = {};
+
+            // 获取产品ID与订单项的映射
+            for (const item of orderItems) {
+                  // 获取SKU对应的产品ID
+                  const sku = await prisma.sku.findUnique({
+                        where: { id: item.skuId },
+                        select: { productId: true }
+                  });
+
+                  if (sku?.productId) {
+                        productQuantities[sku.productId] = (productQuantities[sku.productId] || 0) + item.quantity;
+                  }
+            }
+
+            // 2. 批量更新产品销量
+            const updatePromises = Object.entries(productQuantities).map(
+                  ([productId, quantity]) =>
+                        prisma.product.update({
+                              where: { id: parseInt(productId) },
+                              data: { salesCount: { increment: quantity } }
+                        })
+            );
+
+            await Promise.all(updatePromises);
+
+            return { success: true, orderId, orderNo };
+      } catch (error) {
+            console.error('支付后处理任务失败:', error);
+            throw error;
+      }
 });
 
 // 监听队列错误
