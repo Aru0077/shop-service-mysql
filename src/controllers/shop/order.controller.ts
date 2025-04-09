@@ -282,6 +282,9 @@ export const orderController = {
                         shippingAddress: completeOrder?.shippingAddress
                   };
 
+                  // 添加：清理订单缓存
+                  await cacheUtils.invalidateModuleCache('order', id);
+                  
                   res.sendSuccess(responseData, '订单支付成功');
             } finally {
                   // 释放锁

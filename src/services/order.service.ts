@@ -7,6 +7,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { orderQueue } from '../queues/order.queue';
 import { StockChangeType } from '../constants/stock.constants';
 import { inventoryService } from './inventory.service';
+import { cacheUtils } from '../utils/cache.utils';
 
 // 增强的订单服务
 class OrderService {
@@ -570,6 +571,8 @@ class OrderService {
                   attempts: 3,
                   removeOnComplete: true
             });
+
+            await cacheUtils.invalidateModuleCache('order', order.id);
 
             return {
                   orderId: order.id,

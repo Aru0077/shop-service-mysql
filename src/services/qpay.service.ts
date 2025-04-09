@@ -4,6 +4,7 @@ import { redisClient, prisma } from '../config';
 import { OrderStatus, PaymentStatus } from '../constants/orderStatus.enum';
 import { logger } from '../utils/logger';
 import { orderQueue } from '../queues/order.queue';
+import { cacheUtils } from '../utils/cache.utils';
 
 // QPay配置常量
 const QPAY_API_URL = process.env.QPAY_API_URL || 'https://merchant.qpay.mn/v2';
@@ -171,19 +172,19 @@ class QPayService {
       async refreshAccessToken(refreshToken: string): Promise<any> {
             try {
                   // 新增：检查刷新令牌是否过期
-        const refreshTokenExpiry = await redisClient.get('qpay:refresh_token:expiry');
-        const now = Math.floor(Date.now() / 1000);
+                  const refreshTokenExpiry = await redisClient.get('qpay:refresh_token:expiry');
+                  const now = Math.floor(Date.now() / 1000);
 
-        // 如果存在过期时间且已过期，则直接抛出异常
-        if (refreshTokenExpiry && parseInt(refreshTokenExpiry) <= now) {
-            logger.warn('刷新令牌已过期，将删除并重新获取令牌');
-            // 删除过期的刷新令牌和过期时间
-            await Promise.all([
-                redisClient.del('qpay:refresh_token'),
-                redisClient.del('qpay:refresh_token:expiry')
-            ]);
-            throw new Error('刷新令牌已过期');
-        }
+                  // 如果存在过期时间且已过期，则直接抛出异常
+                  if (refreshTokenExpiry && parseInt(refreshTokenExpiry) <= now) {
+                        logger.warn('刷新令牌已过期，将删除并重新获取令牌');
+                        // 删除过期的刷新令牌和过期时间
+                        await Promise.all([
+                              redisClient.del('qpay:refresh_token'),
+                              redisClient.del('qpay:refresh_token:expiry')
+                        ]);
+                        throw new Error('刷新令牌已过期');
+                  }
 
                   logger.info('开始刷新QPay访问令牌');
 
@@ -205,7 +206,7 @@ class QPayService {
                   const expiresIn = response.data.expires_in;
                   const refreshExpiresIn = response.data.refresh_expires_in;
 
-                 
+
 
                   // 设置过期时间（同 getAccessToken 方法）
                   let tokenExpiry = QPAY_TOKEN_EXPIRY; // 默认值
@@ -598,6 +599,9 @@ class QPayService {
                   });
 
                   logger.info(`成功处理订单 ${orderId} 的QPay支付回调`, { paymentId });
+
+                  // 添加：清理订单缓存
+                  await cacheUtils.invalidateModuleCache('order', orderId);
 
                   return {
                         success: true,
