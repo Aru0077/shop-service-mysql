@@ -603,6 +603,9 @@ class QPayService {
                   // 添加：清理订单缓存
                   await cacheUtils.invalidateModuleCache('order', orderId);
 
+                  // 添加：清理购物车缓存
+                  await cacheUtils.invalidateModuleCache('cart', order.userId); 
+
                   return {
                         success: true,
                         message: '支付成功处理'

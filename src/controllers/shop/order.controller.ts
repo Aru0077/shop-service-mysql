@@ -284,7 +284,7 @@ export const orderController = {
 
                   // 添加：清理订单缓存
                   await cacheUtils.invalidateModuleCache('order', id);
-                  
+
                   res.sendSuccess(responseData, '订单支付成功');
             } finally {
                   // 释放锁
@@ -302,6 +302,10 @@ export const orderController = {
             }
 
             const result = await orderService.cancelOrder(id, userId);
+
+            // Add this line to invalidate the order cache
+            await cacheUtils.invalidateModuleCache('order', id);
+
             res.sendSuccess(result, '订单取消成功');
       }),
 
