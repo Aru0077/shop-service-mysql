@@ -30,7 +30,7 @@ export const orderController = {
             const { addressId, cartItemIds, remark } = req.body;
 
             if (!userId) {
-                  throw new AppError(401, 'fail', '请先登录');
+                  throw new AppError(401, 'fail', 'Please login first');
             }
 
             // 幂等性控制
@@ -40,14 +40,14 @@ export const orderController = {
             if (existingOrderId) {
                   const existingOrder = await orderService.getOrderBasicInfo(existingOrderId);
                   if (existingOrder) {
-                        return res.sendSuccess(existingOrder, '订单已存在，请勿重复提交');
+                        return res.sendSuccess(existingOrder, 'Order already exists, please do not submit again');
                   }
             }
 
             // 并发控制 - 使用可重入锁
             const lockResult = await orderService.acquireOrderLock(userId, cartItemIds);
             if (!lockResult.success) {
-                  throw new AppError(429, 'fail', '订单处理中，请稍后再试');
+                  throw new AppError(429, 'fail', 'Order is being processed, please try again later');
             }
 
             try {
@@ -121,7 +121,7 @@ export const orderController = {
                   };
 
                   // 返回订单信息
-                  res.sendSuccess(responseData, '订单创建成功，请在10分钟内完成支付');
+                  res.sendSuccess(responseData, 'Order created successfully, please complete payment within 10 minutes');
             } catch (error) {
                   // 发生错误时自动回滚
                   // await orderService.handleOrderError(orderId, orderNo, error);
@@ -138,7 +138,7 @@ export const orderController = {
             const { productId, skuId, quantity, addressId, remark } = req.body;
 
             if (!userId) {
-                  throw new AppError(401, 'fail', '请先登录');
+                  throw new AppError(401, 'fail', 'Please login first');
             }
 
             // 使用优化后的订单服务执行快速购买
@@ -166,7 +166,7 @@ export const orderController = {
                   orderItems: completeOrder?.orderItems
             };
 
-            res.sendSuccess(responseData, '订单创建成功，请在10分钟内完成支付');
+            res.sendSuccess(responseData, 'Order created successfully, please complete payment within 10 minutes');
       }),
 
       // 获取订单列表 - 使用缓存和数据库优化
@@ -177,7 +177,7 @@ export const orderController = {
             const limitNumber = parseInt(limit as string);
 
             if (!userId) {
-                  throw new AppError(401, 'fail', '请先登录');
+                  throw new AppError(401, 'fail', 'Please login first');
             }
 
             // 使用缓存获取订单列表
@@ -196,13 +196,13 @@ export const orderController = {
             const { id } = req.params;
 
             if (!userId) {
-                  throw new AppError(401, 'fail', '请先登录');
+                  throw new AppError(401, 'fail', 'Please login first');
             }
 
             // 检查订单是否属于当前用户
             const hasAccess = await orderService.checkOrderAccess(id, userId);
             if (!hasAccess) {
-                  throw new AppError(403, 'fail', '无权访问此订单');
+                  throw new AppError(403, 'fail', 'No permission to access this order');
             }
 
             // 并行获取订单数据
@@ -214,7 +214,7 @@ export const orderController = {
             ]);
 
             if (!orderBasic) {
-                  throw new AppError(404, 'fail', '订单不存在');
+                  throw new AppError(404, 'fail', 'Order does not exist');
             }
 
             // 返回组合后的数据
@@ -233,21 +233,21 @@ export const orderController = {
             const { paymentType, transactionId = orderService.generateTransactionId() } = req.body;
 
             if (!userId) {
-                  throw new AppError(401, 'fail', '请先登录');
+                  throw new AppError(401, 'fail', 'Please login first');
             }
 
             // 幂等性控制
             const paymentKey = `payment:${id}:${transactionId}`;
             const hasProcessed = await redisClient.exists(paymentKey);
             if (hasProcessed) {
-                  return res.sendSuccess({ orderId: id, status: 'processed' }, '订单已处理，请勿重复支付');
+                  return res.sendSuccess({ orderId: id, status: 'processed' }, 'Order has been processed, please do not pay again');
             }
 
             // 获取分布式锁
             const lockKey = `order:pay:lock:${id}`;
             const lockAcquired = await orderService.acquireDistributedLock(lockKey, 30);
             if (!lockAcquired) {
-                  throw new AppError(429, 'fail', '订单正在处理中，请稍后再试');
+                  throw new AppError(429, 'fail', 'Order is being processed, please try again later');
             }
 
             try {
@@ -285,7 +285,7 @@ export const orderController = {
                   // 添加：清理订单缓存
                   await cacheUtils.invalidateModuleCache('order', id);
 
-                  res.sendSuccess(responseData, '订单支付成功');
+                  res.sendSuccess(responseData, 'Order payment successful');
             } finally {
                   // 释放锁
                   await orderService.releaseDistributedLock(lockKey);
@@ -298,7 +298,7 @@ export const orderController = {
             const { id } = req.params;
 
             if (!userId) {
-                  throw new AppError(401, 'fail', '请先登录');
+                  throw new AppError(401, 'fail', 'Please login first');
             }
 
             const result = await orderService.cancelOrder(id, userId);
@@ -306,7 +306,7 @@ export const orderController = {
             // Add this line to invalidate the order cache
             await cacheUtils.invalidateModuleCache('order', id);
 
-            res.sendSuccess(result, '订单取消成功');
+            res.sendSuccess(result, 'Order canceled successfully');
       }),
 
       // 确认收货
@@ -315,10 +315,10 @@ export const orderController = {
             const { id } = req.params;
 
             if (!userId) {
-                  throw new AppError(401, 'fail', '请先登录');
+                  throw new AppError(401, 'fail', 'Please login first');
             }
 
             const result = await orderService.confirmOrderReceipt(id, userId);
-            res.sendSuccess(result, '确认收货成功');
+            res.sendSuccess(result, 'Receipt confirmed successfully');
       })
 };

@@ -10,7 +10,7 @@ export const addressController = {
       createAddress: asyncHandler(async (req: Request, res: Response) => {
             const userId = req.shopUser?.id;
             if (!userId) {
-                  throw new AppError(401, 'fail', '请先登录');
+                  throw new AppError(401, 'fail', 'Please login first');
             }
 
             // 检查用户已有地址数量
@@ -19,7 +19,7 @@ export const addressController = {
             });
 
             if (addressCount >= 20) {
-                  throw new AppError(400, 'fail', '最多只能添加20个收货地址');
+                  throw new AppError(400, 'fail', 'You can only add up to 20 shipping addresses');
             }
 
             const { receiverName, receiverPhone, province, city, detailAddress, isDefault = 0 } = req.body;
@@ -51,7 +51,7 @@ export const addressController = {
 
             await cacheUtils.invalidateModuleCache('user', userId);
 
-            res.sendSuccess(address, '收货地址添加成功');
+            res.sendSuccess(address, 'Shipping address added successfully');
       }),
 
       // 更新收货地址
@@ -61,7 +61,7 @@ export const addressController = {
             const addressId = parseInt(id);
 
             if (!userId) {
-                  throw new AppError(401, 'fail', '请先登录');
+                  throw new AppError(401, 'fail', 'Please login first');
             }
 
             // 检查地址是否存在且属于当前用户
@@ -73,7 +73,7 @@ export const addressController = {
             });
 
             if (!existingAddress) {
-                  throw new AppError(404, 'fail', '收货地址不存在');
+                  throw new AppError(404, 'fail', 'Shipping address does not exist');
             }
 
             const { receiverName, receiverPhone, province, city, detailAddress, isDefault = 0 } = req.body;
@@ -101,7 +101,7 @@ export const addressController = {
             // 清除用户相关缓存
             await cacheUtils.invalidateModuleCache('user', userId);
 
-            res.sendSuccess(updatedAddress, '收货地址更新成功');
+            res.sendSuccess(updatedAddress, 'Shipping address updated successfully');
       }),
 
       // 删除收货地址
@@ -111,7 +111,7 @@ export const addressController = {
             const addressId = parseInt(id);
 
             if (!userId) {
-                  throw new AppError(401, 'fail', '请先登录');
+                  throw new AppError(401, 'fail', 'Please login first');
             }
 
             // 检查地址是否存在且属于当前用户
@@ -123,7 +123,7 @@ export const addressController = {
             });
 
             if (!existingAddress) {
-                  throw new AppError(404, 'fail', '收货地址不存在');
+                  throw new AppError(404, 'fail', 'Shipping address does not exist');
             }
 
             // 删除地址
@@ -149,7 +149,7 @@ export const addressController = {
             // 清除用户相关缓存
             await cacheUtils.invalidateModuleCache('user', userId);
 
-            res.sendSuccess(null, '收货地址删除成功');
+            res.sendSuccess(null, 'Shipping address deleted successfully');
       }),
 
       // 获取收货地址列表
@@ -157,7 +157,7 @@ export const addressController = {
             const userId = req.shopUser?.id;
 
             if (!userId) {
-                  throw new AppError(401, 'fail', '请先登录');
+                  throw new AppError(401, 'fail', 'Please login first');
             }
 
             // 添加缓存
@@ -182,7 +182,7 @@ export const addressController = {
             const addressId = parseInt(id);
 
             if (!userId) {
-                  throw new AppError(401, 'fail', '请先登录');
+                  throw new AppError(401, 'fail', 'Please login first');
             }
 
             // 检查地址是否存在且属于当前用户
@@ -194,12 +194,12 @@ export const addressController = {
             });
 
             if (!existingAddress) {
-                  throw new AppError(404, 'fail', '收货地址不存在');
+                  throw new AppError(404, 'fail', 'Shipping address does not exist');
             }
 
             // 如果已经是默认地址，不需要操作
             if (existingAddress.isDefault === 1) {
-                  return res.sendSuccess(existingAddress, '该地址已经是默认地址');
+                  return res.sendSuccess(existingAddress, 'This address is already the default address');
             }
 
             // 使用事务保证数据一致性
@@ -224,6 +224,6 @@ export const addressController = {
             // 清除用户相关缓存
             await cacheUtils.invalidateModuleCache('user', userId);
             
-            res.sendSuccess(updatedAddress, '默认地址设置成功');
+            res.sendSuccess(updatedAddress, 'Default address set successfully');
       })
 };

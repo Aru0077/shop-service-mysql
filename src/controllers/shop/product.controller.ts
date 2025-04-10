@@ -231,7 +231,7 @@ export const productController = {
             });
 
             if (!category) {
-                  throw new AppError(404, 'fail', '分类不存在');
+                  throw new AppError(404, 'fail', 'Category does not exist');
             }
 
             // 获取子分类ID（如果是父分类）
@@ -338,7 +338,7 @@ export const productController = {
                   });
 
                   if (!product) {
-                        throw new AppError(404, 'fail', '商品不存在或已下架');
+                        throw new AppError(404, 'fail', 'Product does not exist or is no longer available');
                   }
 
                   return product;

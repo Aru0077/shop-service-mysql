@@ -14,14 +14,14 @@ export const facebookController = {
         const { accessToken } = req.body;
 
         if (!accessToken) {
-            throw new AppError(400, 'fail', '缺少访问令牌');
+            throw new AppError(400, 'fail', 'Missing access token');
         }
 
         try {
             // 验证令牌
             const isValid = await facebookAuthService.verifyAccessToken(accessToken);
             if (!isValid) {
-                throw new AppError(401, 'fail', '无效的访问令牌');
+                throw new AppError(401, 'fail', 'Invalid access token');
             }
 
             // 获取用户信息
@@ -45,7 +45,7 @@ export const facebookController = {
                 token: authResult.token,
                 user: authResult.user,
                 expiresAt
-            }, '登录成功');
+            }, 'Login successful');
 
             logger.info('Facebook令牌登录成功', {
                 userId: authResult.user.id,
@@ -56,7 +56,7 @@ export const facebookController = {
                 error: error.message,
                 stack: error.stack
             });
-            throw new AppError(500, 'fail', '登录处理失败');
+            throw new AppError(500, 'fail', 'Login processing failed');
         }
     })
 };

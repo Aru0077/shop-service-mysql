@@ -14,7 +14,7 @@ export const qpayController = {
             const userId = req.shopUser?.id;
 
             if (!userId) {
-                  throw new AppError(401, 'fail', '请先登录');
+                  throw new AppError(401, 'fail', 'Please login first');
             }
 
             // 验证订单是否属于当前用户
@@ -26,13 +26,13 @@ export const qpayController = {
             });
 
             if (!order) {
-                  throw new AppError(404, 'fail', '订单不存在');
+                  throw new AppError(404, 'fail', 'Order does not exist');
             }
 
             // 创建QPay发票
             const invoiceData = await qpayService.createInvoice(orderId);
 
-            res.sendSuccess(invoiceData, '支付链接创建成功');
+            res.sendSuccess(invoiceData, 'Payment link created successfully');
       }),
 
       /**
@@ -43,7 +43,7 @@ export const qpayController = {
             const userId = req.shopUser?.id;
 
             if (!userId) {
-                  throw new AppError(401, 'fail', '请先登录');
+                  throw new AppError(401, 'fail', 'Please login first');
             }
 
             // 验证订单是否属于当前用户
@@ -55,7 +55,7 @@ export const qpayController = {
             });
 
             if (!order) {
-                  throw new AppError(404, 'fail', '订单不存在');
+                  throw new AppError(404, 'fail', 'Order does not exist');
             }
 
             // 检查支付状态

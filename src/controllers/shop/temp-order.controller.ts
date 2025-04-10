@@ -11,7 +11,7 @@ export const tempOrderController = {
             const userId = req.shopUser?.id;
 
             if (!userId) {
-                  throw new AppError(401, 'fail', '请先登录');
+                  throw new AppError(401, 'fail', 'Please login first');
             }
 
             // 使用 tempOrderService 获取结账信息
@@ -25,14 +25,14 @@ export const tempOrderController = {
             const { mode, cartItemIds, productInfo } = req.body;
 
             if (!userId) {
-                  throw new AppError(401, 'fail', '请先登录');
+                  throw new AppError(401, 'fail', 'Please login first');
             }
 
             // 添加限流控制
             const rateKey = `rate:temp_order:create:${userId}`;
             const allowed = await cacheUtils.rateLimit(rateKey, 5, 60); // 每分钟最多5次请求
             if (!allowed) {
-                  throw new AppError(429, 'fail', '请求过于频繁，请稍后再试');
+                  throw new AppError(429, 'fail', 'Too many requests, please try again later');
             }
 
             // 创建临时订单
@@ -43,7 +43,7 @@ export const tempOrderController = {
                   productInfo
             );
 
-            res.sendSuccess(tempOrder, '临时订单创建成功');
+            res.sendSuccess(tempOrder, 'Temporary order created successfully');
       }),
 
       // 获取临时订单详情
@@ -52,7 +52,7 @@ export const tempOrderController = {
             const { id } = req.params;
 
             if (!userId) {
-                  throw new AppError(401, 'fail', '请先登录');
+                  throw new AppError(401, 'fail', 'Please login first');
             }
 
             // 获取临时订单
@@ -60,7 +60,7 @@ export const tempOrderController = {
 
             // 检查订单是否过期
             if (new Date(tempOrder.expireTime) < new Date()) {
-                  throw new AppError(400, 'fail', '临时订单已过期，请重新下单');
+                  throw new AppError(400, 'fail', 'Temporary order has expired, please place a new order');
             }
 
             res.sendSuccess(tempOrder);
@@ -73,7 +73,7 @@ export const tempOrderController = {
             const { addressId, paymentType, remark } = req.body;
 
             if (!userId) {
-                  throw new AppError(401, 'fail', '请先登录');
+                  throw new AppError(401, 'fail', 'Please login first');
             }
 
             // 验证临时订单并更新
@@ -83,7 +83,7 @@ export const tempOrderController = {
                   { addressId, paymentType, remark }
             );
 
-            res.sendSuccess(updatedOrder, '临时订单更新成功');
+            res.sendSuccess(updatedOrder, 'Temporary order updated successfully');
       }),
 
       // 确认临时订单并创建正式订单
@@ -92,7 +92,7 @@ export const tempOrderController = {
             const { id } = req.params;
 
             if (!userId) {
-                  throw new AppError(401, 'fail', '请先登录');
+                  throw new AppError(401, 'fail', 'Please login first');
             }
 
             // 添加幂等控制
@@ -100,7 +100,7 @@ export const tempOrderController = {
             const existingOrderId = await cacheUtils.getOrSet(idempotencyKey, async () => null, 600);
 
             if (existingOrderId) {
-                  throw new AppError(400, 'fail', '此临时订单已被处理，请勿重复操作');
+                  throw new AppError(400, 'fail', 'This temporary order has been processed, please do not repeat the operation');
             }
 
             // 从临时订单创建正式订单
@@ -109,7 +109,7 @@ export const tempOrderController = {
             // 设置幂等键，防止重复提交
             await cacheUtils.getOrSet(idempotencyKey, async () => order.id, 3600);
 
-            res.sendSuccess(order, '订单创建成功，请在10分钟内完成支付');
+            res.sendSuccess(order, 'Order created successfully, please complete payment within 10 minutes');
       }),
 
       // 更新并确认临时订单（一步操作）
@@ -119,7 +119,7 @@ export const tempOrderController = {
             const { addressId, paymentType, remark } = req.body;
 
             if (!userId) {
-                  throw new AppError(401, 'fail', '请先登录');
+                  throw new AppError(401, 'fail', 'Please login first');
             }
 
             // 添加幂等控制
@@ -127,7 +127,7 @@ export const tempOrderController = {
             const existingOrderId = await cacheUtils.getOrSet(idempotencyKey, async () => null, 600);
 
             if (existingOrderId) {
-                  throw new AppError(400, 'fail', '此临时订单已被处理，请勿重复操作');
+                  throw new AppError(400, 'fail', 'This temporary order has been processed, please do not repeat the operation');
             }
 
             // 一步完成更新和确认
@@ -140,7 +140,7 @@ export const tempOrderController = {
             // 设置幂等键，防止重复提交
             await cacheUtils.getOrSet(idempotencyKey, async () => order.id, 3600);
 
-            res.sendSuccess(order, '订单创建成功，请在10分钟内完成支付');
+            res.sendSuccess(order, 'Order created successfully, please complete payment within 10 minutes');
       }),
 
       // 扩展：刷新临时订单有效期
@@ -149,12 +149,12 @@ export const tempOrderController = {
             const { id } = req.params;
 
             if (!userId) {
-                  throw new AppError(401, 'fail', '请先登录');
+                  throw new AppError(401, 'fail', 'Please login first');
             }
 
             // 刷新临时订单有效期
             const refreshedOrder = await tempOrderService.refreshTempOrder(id, userId);
 
-            res.sendSuccess(refreshedOrder, '临时订单有效期已刷新');
+            res.sendSuccess(refreshedOrder, 'Temporary order validity period has been refreshed');
       })
 };

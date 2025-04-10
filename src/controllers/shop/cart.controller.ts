@@ -13,7 +13,7 @@ export const cartController = {
             const { productId, skuId, quantity = 1 } = req.body;
 
             if (!userId) {
-                  throw new AppError(401, 'fail', '请先登录');
+                  throw new AppError(401, 'fail', 'Please login first');
             }
 
 
@@ -21,7 +21,7 @@ export const cartController = {
             const throttleKey = `cart:throttle:${userId}:${productId}:${skuId}`;
             const isThrottled = await redisClient.exists(throttleKey);
             if (isThrottled) {
-                  return res.sendSuccess(null, '商品已添加到购物车');
+                  return res.sendSuccess(null, 'Product has been added to cart');
             }
 
             // 设置短暂的节流时间 - 3秒
@@ -60,7 +60,7 @@ export const cartController = {
 
                   // 商品或SKU不存在
                   if (!productAndSku || productAndSku.skus.length === 0) {
-                        throw new AppError(404, 'fail', '商品不存在或已下架');
+                        throw new AppError(404, 'fail', 'Product does not exist or is no longer available');
                   }
 
                   const product = productAndSku;
@@ -71,7 +71,7 @@ export const cartController = {
                   const effectiveQuantity = isLowStock ? sku.stock || 0 : quantity;
 
                   if (effectiveQuantity <= 0) {
-                        throw new AppError(400, 'fail', '商品库存不足');
+                        throw new AppError(400, 'fail', 'Insufficient product inventory');
                   }
 
                   // 使用单个事务处理购物车更新和计数
@@ -163,10 +163,10 @@ export const cartController = {
                   // 操作成功后清除用户购物车缓存
                   await cacheUtils.invalidateModuleCache('cart', userId);
 
-                  res.sendSuccess(responseData, '商品已成功添加到购物车');
+                  res.sendSuccess(responseData, 'Product has been successfully added to cart');
             } catch (error) {
                   if (error instanceof AppError) throw error;
-                  throw new AppError(500, 'fail', '添加购物车失败，请稍后重试');
+                  throw new AppError(500, 'fail', 'Failed to add to cart, please try again later');
             }
       }),
 
@@ -178,7 +178,7 @@ export const cartController = {
             const cartItemId = parseInt(id);
 
             if (!userId) {
-                  throw new AppError(401, 'fail', '请先登录');
+                  throw new AppError(401, 'fail', 'Please login first');
             }
 
             // 检查购物车项是否存在且属于当前用户
@@ -193,12 +193,12 @@ export const cartController = {
             });
 
             if (!cartItem) {
-                  throw new AppError(404, 'fail', '购物车项不存在');
+                  throw new AppError(404, 'fail', 'Cart item does not exist');
             }
 
             // 验证商品是否仍然上架
             if (cartItem.product.status !== ProductStatus.ONLINE) {
-                  throw new AppError(400, 'fail', '商品已下架');
+                  throw new AppError(400, 'fail', 'Product is no longer available');
             }
 
             // 检查库存是否足够
@@ -207,7 +207,7 @@ export const cartController = {
             });
 
             if (!sku || (sku.stock || 0) < quantity) {
-                  throw new AppError(400, 'fail', '商品库存不足');
+                  throw new AppError(400, 'fail', 'Insufficient product inventory');
             }
 
             // 更新购物车项
@@ -262,7 +262,7 @@ export const cartController = {
             // 清除缓存
             await cacheUtils.invalidateModuleCache('cart', req.shopUser?.id);
 
-            res.sendSuccess(responseData, '购物车已更新');
+            res.sendSuccess(responseData, 'Cart has been updated');
       }),
 
       // 删除购物车商品
@@ -272,7 +272,7 @@ export const cartController = {
             const cartItemId = parseInt(id);
 
             if (!userId) {
-                  throw new AppError(401, 'fail', '请先登录');
+                  throw new AppError(401, 'fail', 'Please login first');
             }
 
             // 检查购物车项是否存在且属于当前用户
@@ -284,7 +284,7 @@ export const cartController = {
             });
 
             if (!cartItem) {
-                  throw new AppError(404, 'fail', '购物车项不存在');
+                  throw new AppError(404, 'fail', 'Cart item does not exist');
             }
 
             // 删除购物车项
@@ -295,7 +295,7 @@ export const cartController = {
             // 添加这一行：使购物车缓存失效
             await cacheUtils.invalidateModuleCache('cart', userId);
 
-            res.sendSuccess(null, '商品已从购物车移除');
+            res.sendSuccess(null, 'Product has been removed from cart');
       }),
 
       // 获取购物车列表
@@ -306,7 +306,7 @@ export const cartController = {
             const rateKey = `rate:cart:${userId}`;
             const allowed = await cacheUtils.rateLimit(rateKey, 10, 60); // 每分钟10次
             if (!allowed) {
-                  throw new AppError(429, 'fail', '请求过于频繁，请稍后再试');
+                  throw new AppError(429, 'fail', 'Too many requests, please try again later');
             }
 
             const { page = '1', limit = '10' } = req.query;
@@ -315,7 +315,7 @@ export const cartController = {
             const skip = (pageNumber - 1) * limitNumber;
 
             if (!userId) {
-                  throw new AppError(401, 'fail', '请先登录');
+                  throw new AppError(401, 'fail', 'Please login first');
             }
 
             // 使用缓存减少数据库查询
@@ -418,7 +418,7 @@ export const cartController = {
             const userId = req.shopUser?.id;
 
             if (!userId) {
-                  throw new AppError(401, 'fail', '请先登录');
+                  throw new AppError(401, 'fail', 'Please login first');
             }
 
             // 删除用户的所有购物车项
@@ -426,7 +426,7 @@ export const cartController = {
                   where: { userId }
             });
 
-            res.sendSuccess(null, '购物车已清空');
+            res.sendSuccess(null, 'Product has been removed from cart');
       }),
 
       // 预览订单金额（包含满减优惠）
@@ -436,7 +436,7 @@ export const cartController = {
             const { cartItemIds, productInfo } = req.body;
 
             if (!userId) {
-                  throw new AppError(401, 'fail', '请先登录');
+                  throw new AppError(401, 'fail', 'Please login first');
             }
 
             let totalAmount = 0;
@@ -462,7 +462,7 @@ export const cartController = {
                   });
 
                   if (cartItems.length === 0) {
-                        throw new AppError(400, 'fail', '请选择要购买的商品');
+                        throw new AppError(400, 'fail', 'Please select products to purchase');
                   }
 
                   // 获取SKU信息
@@ -521,7 +521,7 @@ export const cartController = {
                   ]);
 
                   if (!product) {
-                        throw new AppError(404, 'fail', '商品不存在或已下架');
+                        throw new AppError(404, 'fail', 'Product does not exist or is no longer available');
                   }
 
                   if (!sku) {
@@ -539,7 +539,7 @@ export const cartController = {
                         unitPrice
                   });
             } else {
-                  throw new AppError(400, 'fail', '参数错误');
+                  throw new AppError(400, 'fail', 'Parameter error');
             }
 
             // 查找可用的满减规则

@@ -32,7 +32,7 @@ export const userController = {
             });
 
             if (existingUser) {
-                  throw new AppError(400, 'fail', '用户名已被注册');
+                  throw new AppError(400, 'fail', 'Username is already registered');
             }
 
             // 加密密码
@@ -53,7 +53,7 @@ export const userController = {
                   createdAt: user.createdAt
             };
 
-            res.sendSuccess(userData, '注册成功');
+            res.sendSuccess(userData, 'Registration successful');
       }),
 
       // 用户登录
@@ -66,17 +66,17 @@ export const userController = {
             });
 
             if (!user || !user.password) {
-                  throw new AppError(401, 'fail', '用户名或密码错误');
+                  throw new AppError(401, 'fail', 'Incorrect username or password');
             }
 
             if (user.isBlacklist === 1) {
-                  throw new AppError(403, 'fail', '账号已被禁用');
+                  throw new AppError(403, 'fail', 'Account has been disabled');
             }
 
             // 验证密码
             const isPasswordValid = await compare(password, user.password);
             if (!isPasswordValid) {
-                  throw new AppError(401, 'fail', '用户名或密码错误');
+                  throw new AppError(401, 'fail', 'Incorrect username or password');
             }
 
             // 生成JWT令牌
@@ -96,7 +96,7 @@ export const userController = {
                   username: user.username
             };
 
-            res.sendSuccess({ token, user: userData, expiresAt }, '登录成功');
+            res.sendSuccess({ token, user: userData, expiresAt }, 'Login successful');
       }),
 
       // 退出登录
@@ -108,7 +108,7 @@ export const userController = {
                   await redisClient.del(`shop:user:${userId}:token`);
             }
 
-            res.sendSuccess(null, '已成功退出登录');
+            res.sendSuccess(null, 'Logout successful');
       }),
 
       // 删除账号
@@ -117,7 +117,7 @@ export const userController = {
             const userId = req.shopUser?.id;
 
             if (!userId) {
-                  throw new AppError(401, 'fail', '请先登录');
+                  throw new AppError(401, 'fail', 'Please login first');
             }
 
             // 查找用户
@@ -126,7 +126,7 @@ export const userController = {
             });
 
             if (!user) {
-                  throw new AppError(404, 'fail', '用户不存在');
+                  throw new AppError(404, 'fail', 'User does not exist');
             }
 
             // 检查是否有未完成的订单
@@ -140,7 +140,7 @@ export const userController = {
             });
 
             if (pendingOrders) {
-                  throw new AppError(400, 'fail', '您有未完成的订单，暂时无法删除账号');
+                  throw new AppError(400, 'fail', 'You have unfinished orders, cannot delete account at this time');
             }
 
             // 找出用户的所有订单ID
@@ -193,10 +193,10 @@ export const userController = {
                   // 删除Redis中的令牌
                   await redisClient.del(`shop:user:${userId}:token`);
 
-                  res.sendSuccess(null, '账号已成功删除');
+                  res.sendSuccess(null, 'Account deleted successfully');
             } catch (error) {
                   console.error('删除账号失败:', error);
-                  throw new AppError(500, 'fail', '删除账号失败，请稍后再试');
+                  throw new AppError(500, 'fail', 'Failed to delete account, please try again later');
             }
       })
 };

@@ -13,7 +13,7 @@ export const favoriteController = {
             const { productId } = req.body;
 
             if (!userId) {
-                  throw new AppError(401, 'fail', '请先登录');
+                  throw new AppError(401, 'fail', 'Please login first');
             }
 
             // 检查商品是否存在且状态为上架
@@ -25,7 +25,7 @@ export const favoriteController = {
             });
 
             if (!product) {
-                  throw new AppError(404, 'fail', '商品不存在或已下架');
+                  throw new AppError(404, 'fail', 'Product does not exist or is no longer available');
             }
 
             // 检查是否已收藏
@@ -39,7 +39,7 @@ export const favoriteController = {
             });
 
             if (existingFavorite) {
-                  return res.sendSuccess(null, '商品已收藏');
+                  return res.sendSuccess(null, 'Product already favorited');
             }
 
             // 添加收藏
@@ -83,7 +83,7 @@ export const favoriteController = {
             await cacheUtils.invalidateModuleCache('user', userId);
             await cacheUtils.invalidateCache(`favorites:${userId}:*`);
 
-            res.sendSuccess(completeFavorite, '收藏成功');
+            res.sendSuccess(completeFavorite, 'Added to favorites successfully');
       }),
 
       // 取消收藏商品
@@ -92,7 +92,7 @@ export const favoriteController = {
             const { productId } = req.params;
 
             if (!userId) {
-                  throw new AppError(401, 'fail', '请先登录');
+                  throw new AppError(401, 'fail', 'Please login first');
             }
 
             const parsedProductId = parseInt(productId);
@@ -108,7 +108,7 @@ export const favoriteController = {
             });
 
             if (!existingFavorite) {
-                  return res.sendSuccess(null, '商品未收藏');
+                  return res.sendSuccess(null, 'Product not in favorites');
             }
 
             // 删除收藏
@@ -121,7 +121,7 @@ export const favoriteController = {
                   }
             });
             await cacheUtils.invalidateCache(`favorites:${userId}:*`);
-            res.sendSuccess(null, '取消收藏成功');
+            res.sendSuccess(null, 'Removed from favorites successfully');
       }),
 
       // 批量取消收藏
@@ -130,7 +130,7 @@ export const favoriteController = {
             const { productIds } = req.body;
 
             if (!userId) {
-                  throw new AppError(401, 'fail', '请先登录');
+                  throw new AppError(401, 'fail', 'Please login first');
             }
 
             // 批量删除收藏
@@ -143,7 +143,7 @@ export const favoriteController = {
                   }
             });
             await cacheUtils.invalidateCache(`favorites:${userId}:*`);
-            res.sendSuccess(null, '批量取消收藏成功');
+            res.sendSuccess(null, 'Batch removal from favorites successful');
       }),
 
       // 分页获取收藏商品列表
@@ -156,12 +156,8 @@ export const favoriteController = {
             const skip = (pageNumber - 1) * limitNumber;
             const getIdsOnly = idsOnly === 'true';
 
-            console.log('查询参数:', req.query);
-            console.log('idsOnly 值:', idsOnly, '类型:', typeof idsOnly);
-            console.log('getIdsOnly 解析结果:', getIdsOnly);
-
             if (!userId) {
-                  throw new AppError(401, 'fail', '请先登录');
+                  throw new AppError(401, 'fail', 'Please login first');
             }
 
             // 使用缓存，针对不同查询模式使用不同的缓存键

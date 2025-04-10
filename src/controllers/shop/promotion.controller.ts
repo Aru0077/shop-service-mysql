@@ -37,7 +37,7 @@ export const promotionController = {
     const totalAmount = parseInt(amount as string);
 
     if (isNaN(totalAmount) || totalAmount <= 0) {
-      return res.sendSuccess(null, '无可用优惠');
+      return res.sendSuccess(null, 'No available promotions');
     }
 
     const now = new Date();
