@@ -112,7 +112,7 @@ class OrderScheduleService {
             const taskName = 'completeOrders';
             try {
                   logger.info(`开始执行任务: ${taskName}`);
-                  const twelveHoursAgo = new Date(Date.now() - 12 * 60 * 60 * 1000);
+                  const fifteenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
                   // 查找超过12小时已支付未完成的订单
                   const paidOrders = await prisma.order.findMany({
@@ -122,7 +122,7 @@ class OrderScheduleService {
                               },
                               paymentStatus: PaymentStatus.PAID,
                               updatedAt: {
-                                    lt: twelveHoursAgo
+                                    lt: fifteenDaysAgo
                               }
                         }
                   });
